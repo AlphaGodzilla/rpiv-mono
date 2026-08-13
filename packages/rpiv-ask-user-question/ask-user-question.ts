@@ -7,6 +7,9 @@ import {
 	type AskUserBlockedEventPayload,
 	type AskUserPromptEventPayload,
 } from "./events.js";
+import { classifyRemoteError, createFeishuTransport } from "./remote/feishu-channel.js";
+import { getLocalTimeoutMs, loadRemoteConfig, type RemoteConfig, shouldUseRemote } from "./remote/remote-config.js";
+import { type RemoteOutcome, type RemoteQuestion, runRemoteQuestionnaire } from "./remote/remote-questionnaire.js";
 // Static import is fine — rpc-fallback pulls only types + the i18n bridge,
 // none of the ~560ms TUI render graph that QuestionnaireSession lazy-loads.
 import { hasDialogUI, runRpcQuestionnaire } from "./rpc-fallback.js";
@@ -54,6 +57,9 @@ const ERROR_NO_UI = "Error: UI not available (running in non-interactive mode)";
 
 const ERROR_NO_CUSTOM_UI =
 	"Error: this client cannot render the questionnaire (custom UI is unavailable, e.g. RPC/ACP hosts such as Zed or Paseo). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
+
+const ERROR_REMOTE_CONNECT_FAILED =
+	"Error: the Feishu remote connection failed (check remote.feishu credentials in ~/.config/rpiv-ask-user-question/config.json and the app's permissions). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 
 const ERROR_SESSION_LOAD_FAILED =
 	"Error: the questionnaire UI failed to load — the host's installed dependencies were likely replaced or removed on disk while Pi was running (e.g. a package-manager install touched the store). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, and tell the user that restoring this tool requires repairing the install if needed and restarting Pi.";
@@ -164,6 +170,25 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 			// Emit event for external listeners (e.g., notification plugins)
 			emitAskUserPromptEvent(pi, typed);
 
+			// Feishu remote as primary mode: every questionnaire goes to Feishu and
+			// the user answers there (group chats must @ the bot). Falls back to the
+			// original flows only when remote mode is off or credentials are missing.
+			const remoteCfg = loadRemoteConfig(loadConfig().remote);
+			if (shouldUseRemote(remoteCfg)) {
+				emitAskUserBlockedEvent(pi, true);
+				try {
+					const outcome = await runRemoteQuestionnaireWithConnect(
+						ctx,
+						typed.questions.map((q, i) => ({ question: q, index: i })),
+						remoteCfg,
+					);
+					if (outcome.kind === "answered") return buildQuestionnaireResponse(outcome.result, typed);
+					return buildToolResult(outcome.message, { answers: outcome.partialAnswers, cancelled: true });
+				} finally {
+					emitAskUserBlockedEvent(pi, false);
+				}
+			}
+
 			// RPC hosts (VSCode pendant, ACP clients like Zed/Paseo — issue #78):
 			// ui.custom() cannot render there, but the select/input dialog
 			// sub-protocol works. Hosts that advertise ctx.mode (pi ≥0.79) route to
@@ -229,6 +254,21 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 					return { consume: true };
 				});
 			}
+			// Local-timeout fallback: when `localTimeoutMs` is configured (and remote
+			// credentials exist), an unanswered local dialog hands the remaining
+			// questions over to Feishu. The timer only starts for the TUI path — the
+			// RPC walker above returned already.
+			const localTimeoutMs = getLocalTimeoutMs(remoteCfg);
+			let localTimer: ReturnType<typeof setTimeout> | undefined;
+			let timedOut = false;
+			if (localTimeoutMs !== undefined) {
+				localTimer = setTimeout(() => {
+					timedOut = true;
+					sessionRef.current?.extractPartialAnswersAndClose();
+				}, localTimeoutMs);
+				// A stray timer must not hold a non-TUI embedder's process open.
+				localTimer.unref?.();
+			}
 
 			emitAskUserBlockedEvent(pi, true);
 			try {
@@ -291,8 +331,41 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 					return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
 				}
 
+				// User cancelled (Esc) — never hand off to Feishu; respect the decline.
+				if (result.cancelled) return buildQuestionnaireResponse(result, typed);
+
+				// Local timeout fired: forward the still-unanswered questions to Feishu
+				// and merge the local answers back into the envelope.
+				if (timedOut) {
+					const answered = new Set(result.answers.map((a) => a.questionIndex));
+					const remaining = typed.questions
+						.map((q, i) => ({ question: q, index: i }))
+						.filter(({ index }) => !answered.has(index));
+					if (remaining.length > 0) {
+						ctx.ui.notify?.(
+							t("remote.fallback_notify", "Local wait timed out — remaining questions sent to Feishu"),
+							"info",
+						);
+						const outcome = await runRemoteQuestionnaireWithConnect(ctx, remaining, remoteCfg);
+						if (outcome.kind === "answered") {
+							return buildQuestionnaireResponse(
+								{
+									answers: [...result.answers, ...outcome.result.answers],
+									cancelled: outcome.result.cancelled,
+								},
+								typed,
+							);
+						}
+						return buildToolResult(outcome.message, {
+							answers: [...result.answers, ...outcome.partialAnswers],
+							cancelled: true,
+						});
+					}
+				}
+
 				return buildQuestionnaireResponse(result, typed);
 			} finally {
+				if (localTimer !== undefined) clearTimeout(localTimer);
 				removeOverlayInputListener?.();
 				emitAskUserBlockedEvent(pi, false);
 			}
@@ -309,6 +382,33 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 	// open.
 	const timer = setTimeout(() => void loadQuestionnaireSession().catch(() => undefined), PREWARM_DELAY_MS);
 	timer.unref?.();
+}
+
+/**
+ * Connect a Feishu transport and run the remote questionnaire. Connect/send
+ * failures are classified and surfaced as an LLM-facing failure envelope —
+ * the user never saw the questions, so this is NOT a decline.
+ */
+async function runRemoteQuestionnaireWithConnect(
+	ctx: { ui: { notify?: (msg: string, level: "info" | "error") => void } },
+	questions: RemoteQuestion[],
+	cfg: RemoteConfig,
+): Promise<RemoteOutcome> {
+	try {
+		const transport = await createFeishuTransport(cfg.feishu);
+		try {
+			return await runRemoteQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
+		} finally {
+			await transport.close();
+		}
+	} catch (err) {
+		const { code, message } = classifyRemoteError(err);
+		return {
+			kind: "failed",
+			message: `${ERROR_REMOTE_CONNECT_FAILED} (code ${code} — ${message})`,
+			partialAnswers: [],
+		};
+	}
 }
 
 export { buildQuestionnaireResponse, buildToolResult };

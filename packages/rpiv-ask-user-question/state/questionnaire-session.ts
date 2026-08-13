@@ -53,6 +53,7 @@ function initialState(): QuestionnaireState {
  */
 export class QuestionnaireSession {
 	private state: QuestionnaireState = initialState();
+	private closed = false;
 
 	private readonly questions: readonly QuestionData[];
 	private readonly isMulti: boolean;
@@ -79,7 +80,13 @@ export class QuestionnaireSession {
 
 	constructor(config: QuestionnaireSessionConfig) {
 		this.tui = config.tui;
-		this.done = config.done;
+		// Guard so an external handoff (local-timeout fallback) and a user
+		// submit/cancel can never double-resolve the host dialog.
+		this.done = (result) => {
+			if (this.closed) return;
+			this.closed = true;
+			config.done(result);
+		};
 		this.questions = config.params.questions;
 		this.isMulti = this.questions.length > 1;
 		this.itemsByTab = config.itemsByTab;
@@ -244,5 +251,19 @@ export class QuestionnaireSession {
 	 */
 	toggleCollapsedExternal(): void {
 		if (!this.inputEditorOpen) this.commit({ kind: "toggle_collapsed" });
+	}
+
+	/**
+	 * External handoff for the local-timeout fallback: snapshot the answers
+	 * committed so far, close the dialog with `{ answers, cancelled: false }`,
+	 * and return the partial result. Unanswered questions produce no entries —
+	 * the caller forwards exactly those to the Feishu remote flow. The
+	 * `closed` guard makes this idempotent against a racing submit/cancel.
+	 */
+	extractPartialAnswersAndClose(): QuestionnaireResult {
+		const answers = [...this.state.answers.values()];
+		const result: QuestionnaireResult = { answers, cancelled: false };
+		this.done(result);
+		return result;
 	}
 }

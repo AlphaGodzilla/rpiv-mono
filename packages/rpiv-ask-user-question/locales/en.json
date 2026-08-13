@@ -27,5 +27,11 @@
   "editor.failed": "External editor failed",
 
   "rpc.multi_instructions": "Enter the numbers of all that apply, comma-separated (e.g. \"1,3\"), or type a custom answer as plain text.",
-  "rpc.custom_answer_title": "Type your answer:"
+  "rpc.custom_answer_title": "Type your answer:",
+
+  "remote.msg.single_hint": "Reply with the option number, or type your own answer. Reply \"取消\" or \"cancel\" to abort.",
+  "remote.msg.multi_hint": "Reply with the numbers of all that apply, comma-separated (e.g. \"1,3\"), or type your own answer. Reply \"取消\" or \"cancel\" to abort.",
+  "remote.sent": "Question sent to Feishu — reply there to answer",
+  "remote.please_text": "Please reply with text (stickers/images cannot answer)",
+  "remote.fallback_notify": "Local wait timed out — remaining questions sent to Feishu"
 }

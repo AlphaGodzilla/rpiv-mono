@@ -9,9 +9,71 @@ render at all.
 | --- | --- | --- |
 | Interactive terminal | `ask_user_question` in its tool list | The full tabbed TUI overlay |
 | RPC / ACP host (VS Code pendant, Zed, Paseo) | `ask_user_question` in its tool list | A sequence of the host's own native select and input dialogs |
+| Feishu remote mode (`remote.enabled`, credentials complete) | `ask_user_question` in its tool list | One Feishu message per question; you reply in Feishu |
 | Non-interactive run (no UI) | Nothing — the tool is removed | Nothing |
 
-### Non-interactive runs
+## Feishu remote mode
+
+When `remote.enabled` is `true` and the Feishu credentials are complete, every
+questionnaire skips the terminal entirely: each question is sent as one message to every
+configured receiver, and the first matching reply is parsed back into the same result
+envelope the TUI produces. This works identically in interactive terminals and RPC/ACP
+hosts — anything with `ctx.hasUI` — because the dialog never opens. Non-interactive runs
+still strip the tool (see below).
+
+Reception rules:
+
+- **Private chats**: any text message answers the pending question (only people who
+  received the question know it exists). Stickers, images and other non-text messages are
+  ignored with a hint.
+- **Group chats**: the bot reacts only to messages that @ it (`requireMention` policy).
+- A reply matching a `cancelWords` entry aborts the whole questionnaire (`cancelled: true`),
+  mirroring `Esc`.
+- Waiting longer than `timeoutMs` per question also cancels — a user who does not answer
+  the first question is unlikely to answer later ones.
+
+### Interactive cards
+
+With `feishu.useCards` (default), each question is sent as a V2 interactive card:
+single-select questions carry one button per option plus a Cancel button. Clicking a
+button answers the question (the click arrives as `card.action.trigger` over the same
+long-connection) and immediately locks the card via the message-update API: the chosen
+button gains a ✓, every other button is disabled. Multi-select questions render the
+options in the card but keep the free-text interaction (`1,2` reply) since a single
+click cannot express a selection list; the card still carries a Cancel button.
+
+Three long-connection callbacks details worth knowing:
+
+1. **A callback response is mandatory.** The platform expects a response within 3
+   seconds or the client shows "回调响应超时". The SDK's Channel layer discards the
+   listener's return value, so a response (`{ toast }`) is injected at the WebSocket
+   dispatcher level.
+2. **The response body cannot carry the updated card** — the platform accepts only
+   V1 card bodies there, while our cards are V2. Card updates therefore go through
+   the update API instead.
+3. **Closing the connection right after answering drops the pending ack.** `close()`
+   waits ~400 ms to let the last ack frame flush before disconnecting.
+
+Card send failures fall back to plain text automatically; `feishu.useCards: false`
+disables cards entirely.
+
+Failure handling: a connection or send failure returns an envelope telling the model the
+user never saw the questions and to ask them as plain chat text — explicitly not a
+decline. The message names the `LarkChannelError.code` (`permission_denied` for bad
+credentials, `not_connected`/`send_timeout` for network trouble) to guide debugging.
+
+### Local-timeout fallback
+
+opens normally but arms a total-duration timer. When it fires, the dialog closes with the
+answers committed so far, a notification announces the handoff, and the *remaining*
+questions are sent to Feishu. The envelope then merges local and remote answers, with
+original question indices preserved. The fallback never engages when the user cancelled
+(`Esc`) or completed the dialog in time, and it does not apply to the RPC dialog walker
+(no unified session to time out).
+
+## Non-interactive runs
+
+A `before_agent_start` hook reconciles the active tool set against `ctx.hasUI` before every
 
 A `before_agent_start` hook reconciles the active tool set against `ctx.hasUI` before every
 turn. When there is no UI, `ask_user_question` is stripped from the list so the model never
@@ -23,7 +85,7 @@ A second guard lives inside the tool handler as a one-turn backstop: if a call s
 arrives without UI, it returns `error: "no_ui"` and the text
 `Error: UI not available (running in non-interactive mode)`.
 
-### RPC and ACP hosts
+## RPC and ACP hosts
 
 RPC hosts report `hasUI: true` because Pi's dialog sub-protocol works there, but custom
 terminal UI does not render. The package detects this two ways: hosts that advertise

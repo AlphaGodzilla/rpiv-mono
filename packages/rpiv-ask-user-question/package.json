@@ -43,6 +43,11 @@
 		"!docs/*.jpg",
 		"!docs/*.svg",
 		"README.md",
+		"remote/feishu-channel.ts",
+		"remote/message-format.ts",
+		"remote/remote-command.ts",
+		"remote/remote-config.ts",
+		"remote/remote-questionnaire.ts",
 		"state/build-questionnaire.ts",
 		"state/external-editor.ts",
 		"state/i18n-bridge.ts",
@@ -94,6 +99,7 @@
 	},
 	"dependencies": {
 		"@juicesharp/rpiv-config": "^2.4.0",
+		"@larksuiteoapi/node-sdk": "^1.73.0",
 		"typebox": "^1.1.24"
 	}
 }

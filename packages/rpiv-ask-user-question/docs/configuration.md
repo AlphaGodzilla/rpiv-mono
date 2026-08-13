@@ -9,9 +9,11 @@ wrong.
 ~/.config/rpiv-ask-user-question/config.json
 ```
 
-The file is optional — with no config at all, every setting takes its default. This
-package only ever *reads* the file; it never creates, writes or chmods it, so its
-permissions are whatever you give it.
+The file is optional — with no config at all, every setting takes its default. During
+normal operation the package only ever *reads* the file; the one exception is the
+`/remote-ask` command, which writes back the `remote.enabled` flag (and nothing else). The
+package never creates, chmods or rewrites the file otherwise, so its permissions are
+whatever you give it.
 
 A complete example:
 
@@ -24,6 +26,20 @@ A complete example:
       "Batch every clarifying question into one ask_user_question call.",
       "Put your recommended option first and suffix it with (Recommended)."
     ]
+  },
+  "remote": {
+    "enabled": false,
+    "localTimeoutMs": 300000,
+    "timeoutMs": 600000,
+    "cancelWords": ["取消", "cancel"],
+    "feishu": {
+      "appId": "cli_xxx",
+      "appSecret": "xxx",
+      "receivers": [
+        { "type": "email", "value": "me@example.com" },
+        { "type": "chat_id", "value": "oc_xxx" }
+      ]
+    }
   }
 }
 ```
@@ -60,6 +76,7 @@ type are likewise dropped back to their default without a warning.
 | `collapseKey` | Key that collapses and expands the dialog overlay. | `"ctrl+]"` |
 | `guidance.promptSnippet` | One-line snippet describing the tool in the system prompt. | built-in snippet |
 | `guidance.promptGuidelines` | List of usage guidelines given to the model. | 4 built-in guidelines |
+| `remote` | Feishu remote-asking mode (see below). | off |
 
 ### `collapseKey`
 
@@ -97,6 +114,66 @@ house style for options.
 only when it is a non-empty array whose entries are all non-empty strings. Anything else
 falls back to the built-in defaults. Both are read once, when the extension registers the
 tool, so changes take effect on the next Pi restart.
+
+### `remote` — Feishu remote asking
+
+Lets `ask_user_question` reach you through a Feishu bot instead of (or after) the local
+dialog. Credentials and receivers live in this config file — there is no environment-variable
+or wizard path. Everything under `remote` is optional; with it absent, behavior is
+identical to a version without this feature.
+
+| Field | What it does | Default |
+| --- | --- | --- |
+| `enabled` | Remote as the primary mode: every questionnaire is sent to Feishu. | `false` |
+| `localTimeoutMs` | Local-timeout fallback threshold. **Only when configured** does an unanswered local dialog hand its remaining questions to Feishu after this many milliseconds. Absent → no local timeout, original flow. | not set |
+| `timeoutMs` | How long to wait for a Feishu reply per question before cancelling. | `600000` (10 min) |
+| `cancelWords` | Exact-match words (after trim, case-insensitive) that abort the remote questionnaire. | `["取消", "cancel"]` |
+| `feishu.appId` / `feishu.appSecret` | Credentials of a Feishu enterprise self-built app (开发者后台 → 凭证与基础信息). | — |
+| `feishu.receivers` | Who receives the questions. Each entry is `{ "type", "value" }`; `type` is one of `open_id`, `user_id`, `union_id`, `email`, `chat_id` (the native `receive_id_type` values — no phone lookup). Invalid entries are dropped. | `[]` |
+| `feishu.useCards` | Send questions as interactive cards. Single-select questions get one clickable button per option plus a Cancel button (the chosen button is checked ✓ and the rest disabled after a click); multi-select questions render the options in the card but still take a text reply (`1,2`). Card sends fall back to plain text automatically. | `true` |
+
+Behavior matrix (when credentials are complete):
+
+| `enabled` | `localTimeoutMs` | Behavior |
+| --- | --- | --- |
+| `true` | any | Everything goes to Feishu immediately. |
+| `false` | configured | Local dialog first; after `localTimeoutMs` it closes, local answers are kept, and the remaining questions go to Feishu. |
+| `false` | not set | Original flow, no timeout. |
+
+If `localTimeoutMs` is configured but the Feishu credentials are missing, the fallback is
+silently disabled — the local dialog never times out, so a config mistake cannot turn a
+waiting user into a cancelled questionnaire.
+
+Each question is sent as one message to every receiver; the first matching reply wins
+(`Type something.`-style custom answers are plain text, option numbers select options,
+multi-select accepts `1,3`). In group chats the bot only reacts to messages that @ it; in
+private chats any message answers the pending question. Non-text messages (stickers,
+images) are ignored with a hint. A cancel word or a per-question timeout cancels the whole
+questionnaire (`cancelled: true`).
+
+With `feishu.useCards` (default) a single-select question arrives as an interactive card
+with one button per option plus a Cancel button. Clicking a button answers immediately
+and locks the card — the chosen button shows a ✓, every other button (including Cancel)
+is disabled so a repeated click cannot double-fire. Text replies keep working alongside
+buttons, and card send failures fall back to plain text.
+
+
+#### `/remote-ask` command
+
+`/remote-ask` toggles or inspects the mode and writes `remote.enabled` back to this file
+(preserving every other field, in the same file the loader actually reads). Every
+invocation prints a status notification:
+
+```
+/remote-ask          → toggle ON/OFF
+/remote-ask on       → enable (errors if credentials are missing)
+/remote-ask off      → disable
+/remote-ask status   → show mode, local fallback, wait timeout, credentials, receivers
+```
+
+The command requires an interactive session, and a failed write never reports success.
+Malformed values in the file still fall back to defaults, never to an error.
+
 
 ## Environment variables
 
