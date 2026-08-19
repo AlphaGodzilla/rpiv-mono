@@ -35,6 +35,20 @@ export interface FeishuRemoteConfig {
 	useCards: boolean;
 }
 
+export interface TgRemoteConfig {
+	botToken: string;
+	/** Target chat — group/supergroup ids are negative, kept as a string. */
+	chatId: string;
+	/** The @-mentioned user's numeric id; ONLY replies from this id count as answers. */
+	userId: number;
+	/** Optional public username (e.g. "@alice") used for the visible @ mention. */
+	username: string | undefined;
+	/** Send questions as inline-keyboard cards (clickable option buttons). Default true. */
+	useCards: boolean;
+	/** Per-question wait timeout for tg, INDEPENDENT of the feishu `timeoutMs`. Default 30 minutes. */
+	timeoutMs: number;
+}
+
 export interface RemoteConfig {
 	/** Remote-as-primary mode. When true (and credentials are complete) every questionnaire goes to Feishu. */
 	enabled: boolean;
@@ -49,10 +63,14 @@ export interface RemoteConfig {
 	/** Exact-match words that abort the remote questionnaire. Default ["取消", "cancel"]. */
 	cancelWords: string[];
 	feishu: FeishuRemoteConfig;
+	/** Telegram config for the session-level `ask-prd` mode (see tg-config). */
+	tg: TgRemoteConfig;
 }
 
 export const DEFAULT_REMOTE_TIMEOUT_MS = 600_000;
 export const DEFAULT_CANCEL_WORDS = ["取消", "cancel"] as const;
+/** 30 minutes — tg messages are not expected to be answered quickly. */
+export const DEFAULT_TG_TIMEOUT_MS = 1_800_000;
 
 function isNonEmptyString(v: unknown): v is string {
 	return typeof v === "string" && v.trim().length > 0;
@@ -77,6 +95,14 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 		timeoutMs: DEFAULT_REMOTE_TIMEOUT_MS,
 		cancelWords: [...DEFAULT_CANCEL_WORDS],
 		feishu: { appId: "", appSecret: "", receivers: [], useCards: true },
+		tg: {
+			botToken: "",
+			chatId: "",
+			userId: 0,
+			username: undefined,
+			useCards: true,
+			timeoutMs: DEFAULT_TG_TIMEOUT_MS,
+		},
 	};
 	if (!raw || typeof raw !== "object") return cfg;
 
@@ -107,12 +133,31 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 				.filter((rec): rec is FeishuReceiver => rec !== undefined);
 		}
 	}
+
+	if (r.tg && typeof r.tg === "object") {
+		const tg = r.tg as Record<string, unknown>;
+		if (isNonEmptyString(tg.botToken)) cfg.tg.botToken = tg.botToken;
+		if (isNonEmptyString(tg.chatId)) cfg.tg.chatId = tg.chatId;
+		if (typeof tg.userId === "number" && Number.isInteger(tg.userId) && tg.userId > 0) cfg.tg.userId = tg.userId;
+		if (typeof tg.username === "string") {
+			const name = tg.username.trim();
+			cfg.tg.username = name.length > 0 ? name : undefined;
+		}
+		if (typeof tg.useCards === "boolean") cfg.tg.useCards = tg.useCards;
+		if (typeof tg.timeoutMs === "number" && Number.isFinite(tg.timeoutMs) && tg.timeoutMs > 0)
+			cfg.tg.timeoutMs = tg.timeoutMs;
+	}
 	return cfg;
 }
 
 /** Credentials complete enough to send/receive on Feishu — independent of `enabled`. */
 export function isFeishuConfigured(cfg: RemoteConfig): boolean {
 	return cfg.feishu.appId.length > 0 && cfg.feishu.appSecret.length > 0 && cfg.feishu.receivers.length > 0;
+}
+
+/** Credentials complete enough to send/receive on Telegram — independent of `enabled` and of the ask-prd session flag. */
+export function isTgConfigured(cfg: RemoteConfig): boolean {
+	return cfg.tg.botToken.length > 0 && cfg.tg.chatId.length > 0 && cfg.tg.userId > 0;
 }
 
 /** Remote-as-primary mode active: `enabled` AND usable credentials. */

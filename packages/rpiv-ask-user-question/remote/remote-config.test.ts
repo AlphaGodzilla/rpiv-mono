@@ -25,8 +25,10 @@ vi.mock("@juicesharp/rpiv-config", async (importOriginal) => {
 import {
 	DEFAULT_CANCEL_WORDS,
 	DEFAULT_REMOTE_TIMEOUT_MS,
+	DEFAULT_TG_TIMEOUT_MS,
 	getLocalTimeoutMs,
 	isFeishuConfigured,
+	isTgConfigured,
 	loadRemoteConfig,
 	type RemoteConfig,
 	setRemoteEnabled,
@@ -200,5 +202,62 @@ describe("setRemoteEnabled", () => {
 		loadRawMock.mockReturnValue({});
 		saveJsonConfigMock.mockReturnValue(false);
 		expect(setRemoteEnabled(true)).toBe(false);
+	});
+});
+
+describe("loadRemoteConfig tg", () => {
+	it("defaults tg to unconfigured", () => {
+		const cfg = loadRemoteConfig({});
+		expect(cfg.tg.botToken).toBe("");
+		expect(cfg.tg.chatId).toBe("");
+		expect(cfg.tg.userId).toBe(0);
+		expect(cfg.tg.username).toBeUndefined();
+		expect(cfg.tg.useCards).toBe(true);
+		expect(cfg.tg.timeoutMs).toBe(DEFAULT_TG_TIMEOUT_MS);
+	});
+
+	it("parses valid tg config", () => {
+		const cfg = loadRemoteConfig({
+			tg: {
+				botToken: "123:abc",
+				chatId: "-1001",
+				userId: 42,
+				username: "@alice",
+				useCards: false,
+				timeoutMs: 99_000,
+			},
+		});
+		expect(cfg.tg.botToken).toBe("123:abc");
+		expect(cfg.tg.chatId).toBe("-1001");
+		expect(cfg.tg.userId).toBe(42);
+		expect(cfg.tg.username).toBe("@alice");
+		expect(cfg.tg.useCards).toBe(false);
+		expect(cfg.tg.timeoutMs).toBe(99_000);
+	});
+
+	it("drops invalid tg fields back to defaults", () => {
+		const cfg = loadRemoteConfig({
+			tg: { botToken: 3, chatId: "", userId: -1, username: "  ", useCards: "yes", timeoutMs: 0 },
+		});
+		expect(cfg.tg.botToken).toBe("");
+		expect(cfg.tg.chatId).toBe("");
+		expect(cfg.tg.userId).toBe(0);
+		expect(cfg.tg.username).toBeUndefined();
+		expect(cfg.tg.useCards).toBe(true);
+		expect(cfg.tg.timeoutMs).toBe(DEFAULT_TG_TIMEOUT_MS);
+	});
+
+	it("treats non-object tg as defaults", () => {
+		expect(loadRemoteConfig({ tg: "x" }).tg.userId).toBe(0);
+		expect(loadRemoteConfig({ tg: null }).tg.botToken).toBe("");
+	});
+});
+
+describe("isTgConfigured", () => {
+	it("requires botToken, chatId and a positive userId", () => {
+		expect(isTgConfigured(loadRemoteConfig({ tg: { botToken: "t", chatId: "c", userId: 1 } }))).toBe(true);
+		expect(isTgConfigured(loadRemoteConfig({ tg: { chatId: "c", userId: 1 } }))).toBe(false);
+		expect(isTgConfigured(loadRemoteConfig({ tg: { botToken: "t", userId: 1 } }))).toBe(false);
+		expect(isTgConfigured(loadRemoteConfig({ tg: { botToken: "t", chatId: "c" } }))).toBe(false);
 	});
 });
