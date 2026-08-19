@@ -19,6 +19,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAskUserQuestionTool } from "./ask-user-question.js";
 import { registerAskUserQuestionReconciler } from "./reconcile.js";
+import { resetAskPrdState } from "./remote/ask-prd-state.js";
 import { registerRemoteCommand } from "./remote/remote-command.js";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.js";
 
@@ -50,6 +51,10 @@ export {
 } from "./events.js";
 
 export default function (pi: ExtensionAPI) {
+	// ask-prd is a session-level mode — every new/restored session starts with it off.
+	pi.on("session_start", () => {
+		resetAskPrdState();
+	});
 	registerAskUserQuestionTool(pi);
 	registerAskUserQuestionReconciler(pi);
 	registerRemoteCommand(pi);

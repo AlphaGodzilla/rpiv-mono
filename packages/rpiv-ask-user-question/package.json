@@ -43,6 +43,7 @@
 		"!docs/*.jpg",
 		"!docs/*.svg",
 		"README.md",
+		"remote/ask-prd-state.ts",
 		"remote/feishu-channel.ts",
 		"remote/message-format.ts",
 		"remote/remote-command.ts",
