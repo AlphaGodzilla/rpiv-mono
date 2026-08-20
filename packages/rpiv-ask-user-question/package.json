@@ -50,7 +50,7 @@
 		"remote/tg-questionnaire.ts",
 		"remote/feishu-channel.ts",
 		"remote/message-format.ts",
-		"remote/remote-command.ts",
+		"remote/rpiv-command.ts",
 		"remote/remote-config.ts",
 		"remote/remote-questionnaire.ts",
 		"state/build-questionnaire.ts",

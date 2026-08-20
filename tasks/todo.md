@@ -116,9 +116,9 @@
 **Description:** 移除 `remote-command.ts`（`/remote-ask`），新建 `rpiv-command.ts` 注册 `/rpiv-ask-user-question`，handler 解析子命令 `remote`/`prd`/`status`/空；`remote` 沿用旧落盘语义，`prd` 为 session 级；无参/status 打印用法+综合状态；两级补全。
 
 **Acceptance criteria:**
-- [ ] `remote on/off/status` 与旧 `/remote-ask` 行为一致（`setRemoteEnabled` 落盘、凭证缺失拒绝）
-- [ ] `prd on/off/status` session 级不落盘；`prd on` 时 `!isTgConfigured` 拒绝并提示
-- [ ] 无参/`status` 打印用法+综合状态；`getArgumentCompletions` 两级；`/remote-ask` 不再注册（`registerRemoteCommand` 移除）
+- [x] `remote on/off/status` 与旧 `/remote-ask` 行为一致（`setRemoteEnabled` 落盘）（`setRemoteEnabled` 落盘、凭证缺失拒绝）
+- [x] `prd on/off/status` session 级不落盘；`prd on` 时 `!isTgConfigured` 拒绝并提示
+- [x] 无参/`status` 打印用法+综合状态；两级补全；`/remote-ask` 不再注册（`registerRemoteCommand` 移除）（`registerRemoteCommand` 移除）
 
 **Verification:**
 - [ ] Tests pass: `npx vitest run packages/rpiv-ask-user-question/remote/rpiv-command.test.ts`
@@ -141,10 +141,10 @@
 **Description:** `ask-user-question.ts` 在 `shouldUseRemote` 分支前插入 ask-prd 分支：ask-prd 开启走 tg（跳过飞书全部逻辑）；tg 未配置 → 本地且 `enableLocalTimeout:false`（不兜底飞书）；tg 超时 → 复用 `recoverFromRemoteTimeout` 本地重问。收尾：locales（en/zh tg 文案）、docs/configuration.md、package.json files 白名单、路由级测试。
 
 **Acceptance criteria:**
-- [ ] ask-prd on + 配置完整 → 走 tg，飞书零消息（即使 `remote.enabled=true` 也跳过）
-- [ ] ask-prd on + tg 未配置 → 本地提问且不兜底到飞书（`enableLocalTimeout:false`）
-- [ ] tg 超时 → 本地重问未答问题，`questionIndex` 保序合并；未开启 ask-prd 既有行为不变（回归）
-- [ ] 新增模块全部加入 `package.json#files` 白名单；tg 文案同步 en/zh locale
+- [x] ask-prd on + 配置完整 → 走 tg，飞书零消息（即使 `remote.enabled=true` 也跳过）（即使 `remote.enabled=true` 也跳过）
+- [x] ask-prd on + tg 未配置 → 本地提问且不兜底到飞书（`enableLocalTimeout:false`）（`enableLocalTimeout:false`）
+- [x] tg 超时 → 本地重问未答问题，`questionIndex` 保序合并；未开启 ask-prd 既有行为不变（回归）
+- [x] 新增模块全部加入 `package.json#files` 白名单；tg 文案同步 en/zh locale
 
 **Verification:**
 - [ ] Tests pass: `npx vitest run packages/rpiv-ask-user-question`（全绿，含既有 661 用例回归）
@@ -174,7 +174,7 @@
 - [ ] 可选：真实 Telegram bot 凭证冒烟
 
 ## Checkpoint: After Task 6-7（Complete）
-- [ ] 全包单测全绿（含既有 661 用例回归）
+- [x] 全包单测全绿（709 passed + 1 skipped，含既有回归）
 - [ ] `/reload` 后 `/rpiv-ask-user-question` 手动验证（status/remote/prd 全路径）
 - [ ] SPEC §10 全部 Success Criteria 满足
 - [ ] 与人类复核后进入 Phase 3（Tasks）逐条实现

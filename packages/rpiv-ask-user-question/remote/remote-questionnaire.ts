@@ -21,16 +21,18 @@ export interface RemoteQuestion {
 
 export type RemoteOutcome =
 	| { kind: "answered"; result: QuestionnaireResult }
+	| { kind: "timed_out"; partialAnswers: QuestionAnswer[] }
 	| { kind: "failed"; message: string; partialAnswers: QuestionAnswer[] };
-
 const ERROR_REMOTE_FAILED_PREFIX =
 	"Error: the Feishu remote questionnaire failed — the user never saw the remaining questions. Do NOT treat this as a decline. Ask the remaining questions as plain chat text instead.";
 
 /**
  * Send every question to every configured receiver, waiting for the first
- * matching reply per question. Cancel words abort; a per-question timeout
- * cancels the whole questionnaire (a user who does not answer is unlikely to
- * answer later questions either).
+ * matching reply per question. Cancel words abort the questionnaire; a
+ * per-question timeout reports `timed_out` with the answers collected so far
+ * so the caller decides how to recover — the local flow asks the still
+ * unanswered questions in the main conversation instead of treating a silent
+ * user as a decline.
  */
 export async function runRemoteQuestionnaire(
 	transport: RemoteTransport,
@@ -74,10 +76,7 @@ export async function runRemoteQuestionnaire(
 			card ? { question, index, cancelWord: cfg.cancelWords[0] ?? "取消" } : undefined,
 		);
 		if (reply === null) {
-			return {
-				kind: "answered",
-				result: { answers, cancelled: true },
-			};
+			return { kind: "timed_out", partialAnswers: answers };
 		}
 
 		const parsed = parseReply(reply.text, question, index, cfg.cancelWords);

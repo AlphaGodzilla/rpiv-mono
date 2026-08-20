@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
 import { loadConfig, resolveCollapseKey, validateGuidanceFields } from "./config.js";
 import {
@@ -7,9 +7,18 @@ import {
 	type AskUserBlockedEventPayload,
 	type AskUserPromptEventPayload,
 } from "./events.js";
+import { isAskPrdActive } from "./remote/ask-prd-state.js";
 import { classifyRemoteError, createFeishuTransport } from "./remote/feishu-channel.js";
-import { getLocalTimeoutMs, loadRemoteConfig, type RemoteConfig, shouldUseRemote } from "./remote/remote-config.js";
+import {
+	getLocalTimeoutMs,
+	isTgConfigured,
+	loadRemoteConfig,
+	type RemoteConfig,
+	shouldUseRemote,
+} from "./remote/remote-config.js";
 import { type RemoteOutcome, type RemoteQuestion, runRemoteQuestionnaire } from "./remote/remote-questionnaire.js";
+import { createTgTransport } from "./remote/tg-channel.js";
+import { runTgQuestionnaire } from "./remote/tg-questionnaire.js";
 // Static import is fine — rpc-fallback pulls only types + the i18n bridge,
 // none of the ~560ms TUI render graph that QuestionnaireSession lazy-loads.
 import { hasDialogUI, runRpcQuestionnaire } from "./rpc-fallback.js";
@@ -61,6 +70,8 @@ const ERROR_NO_CUSTOM_UI =
 const ERROR_REMOTE_CONNECT_FAILED =
 	"Error: the Feishu remote connection failed (check remote.feishu credentials in ~/.config/rpiv-ask-user-question/config.json and the app's permissions). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 
+const ERROR_TG_CONNECT_FAILED =
+	"Error: the Telegram remote connection failed (check remote.tg credentials in ~/.config/rpiv-ask-user-question/config.json, that the bot is in the chat, and that the bot token has no other poller). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 const ERROR_SESSION_LOAD_FAILED =
 	"Error: the questionnaire UI failed to load — the host's installed dependencies were likely replaced or removed on disk while Pi was running (e.g. a package-manager install touched the store). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, and tell the user that restoring this tool requires repairing the install if needed and restarting Pi.";
 
@@ -174,6 +185,43 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 			// the user answers there (group chats must @ the bot). Falls back to the
 			// original flows only when remote mode is off or credentials are missing.
 			const remoteCfg = loadRemoteConfig(loadConfig().remote);
+
+			// Session-level ask-prd: Telegram takes over and ALL Feishu logic — the
+			// remote-as-primary path AND the local-timeout fallback to Feishu — is
+			// skipped. When tg is not configured we still go local, but with the
+			// Feishu fallback disabled so nothing ever reaches Feishu under ask-prd.
+			if (isAskPrdActive(ctx.sessionManager?.getSessionId())) {
+				emitAskUserBlockedEvent(pi, true);
+				try {
+					if (!isTgConfigured(remoteCfg)) {
+						return localOutcomeEnvelope(
+							await runLocalQuestionnaire(pi, ctx, typed, remoteCfg, { enableLocalTimeout: false }),
+							typed,
+						);
+					}
+					const outcome = await runTgQuestionnaireWithConnect(
+						ctx,
+						typed.questions.map((q, i) => ({ question: q, index: i })),
+						remoteCfg,
+					);
+					if (outcome.kind === "answered") return buildQuestionnaireResponse(outcome.result, typed);
+					// Telegram stayed silent past its (independent, longer) timeout — recover
+					// to the main conversation's local ask instead of treating silence as a decline.
+					if (outcome.kind === "timed_out") {
+						const recovered = await recoverFromRemoteTimeout(
+							pi,
+							ctx,
+							typed.questions.map((q, i) => ({ question: q, index: i })),
+							outcome,
+							remoteCfg,
+						);
+						return localOutcomeEnvelope(recovered, typed);
+					}
+					return buildToolResult(outcome.message, { answers: outcome.partialAnswers, cancelled: true });
+				} finally {
+					emitAskUserBlockedEvent(pi, false);
+				}
+			}
 			if (shouldUseRemote(remoteCfg)) {
 				emitAskUserBlockedEvent(pi, true);
 				try {
@@ -183,192 +231,25 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 						remoteCfg,
 					);
 					if (outcome.kind === "answered") return buildQuestionnaireResponse(outcome.result, typed);
+					// Feishu stayed silent past the per-question timeout — recover to the
+					// main conversation's local ask instead of treating silence as a decline.
+					if (outcome.kind === "timed_out") {
+						const recovered = await recoverFromRemoteTimeout(
+							pi,
+							ctx,
+							typed.questions.map((q, i) => ({ question: q, index: i })),
+							outcome,
+							remoteCfg,
+						);
+						return localOutcomeEnvelope(recovered, typed);
+					}
 					return buildToolResult(outcome.message, { answers: outcome.partialAnswers, cancelled: true });
 				} finally {
 					emitAskUserBlockedEvent(pi, false);
 				}
 			}
 
-			// RPC hosts (VSCode pendant, ACP clients like Zed/Paseo — issue #78):
-			// ui.custom() cannot render there, but the select/input dialog
-			// sub-protocol works. Hosts that advertise ctx.mode (pi ≥0.79) route to
-			// the sequential dialog walker up front, skipping the TUI render-graph
-			// import entirely; RPC builds that predate ctx.mode are caught by the
-			// custom()-resolved-undefined backstop below. See ./rpc-fallback.ts.
-			if ((ctx as { mode?: string }).mode === "rpc" && hasDialogUI(ctx.ui)) {
-				emitAskUserBlockedEvent(pi, true);
-				try {
-					return buildQuestionnaireResponse(await runRpcQuestionnaire(ctx.ui, typed), typed);
-				} finally {
-					emitAskUserBlockedEvent(pi, false);
-				}
-			}
-
-			const itemsByTab: WrappingSelectItem[][] = typed.questions.map((q) => buildItemsForQuestion(q));
-
-			// Lazy — QuestionnaireSession pulls the ~560ms view/TUI render graph;
-			// load it only when the tool runs, not at extension registration.
-			const sessionLoad = await loadQuestionnaireSession();
-			if (!sessionLoad.ok) {
-				return buildToolResult(sessionLoad.message, { answers: [], cancelled: true, error: sessionLoad.error });
-			}
-			const { QuestionnaireSession } = sessionLoad.module;
-			// Resolve the collapse/expand key spec from config. Default is `ctrl+]`; users
-			// with non-US layouts (e.g. Latin American, where `]` is shifted) can override
-			// via the `collapseKey` config field. `resolveCollapseKey` also accepts the
-			// sentinel value `"off"` to disable the shortcut entirely.
-			const collapseKey = resolveCollapseKey(loadConfig());
-
-			// Capture the overlay handle so the session can call `setHidden()` when the
-			// user toggles collapse, and register a raw terminal input listener for the
-			// same key so the toggle still works while the overlay is hidden (pi-tui does
-			// not route input to a hidden overlay's `component.handleInput`).
-			const sessionRef: {
-				current: import("./state/questionnaire-session.js").QuestionnaireSession | null;
-			} = { current: null };
-			const overlayHandleRef: { current: import("@earendil-works/pi-tui").OverlayHandle | undefined } = {
-				current: undefined,
-			};
-			let hasAnnouncedHide = false;
-			let removeOverlayInputListener: (() => void) | undefined;
-
-			if (collapseKey !== "off" && typeof ctx.ui.onTerminalInput === "function") {
-				removeOverlayInputListener = ctx.ui.onTerminalInput((data) => {
-					const handle = overlayHandleRef.current;
-					if (!handle) return undefined;
-					// Only act while the questionnaire is hidden (its handleInput is
-					// unreachable) or actually focused. When some other overlay is on
-					// top (e.g. `/btw`), leave the keystroke to that overlay instead of
-					// toggling the questionnaire from underneath it.
-					if (!handle.isHidden() && !handle.isFocused()) return undefined;
-					if (!matchesKey(data, collapseKey as Parameters<typeof matchesKey>[1])) return undefined;
-					// Kitty-protocol terminals report press, repeat, and release separately.
-					// Toggle only on the initial press so a tap does not immediately reopen
-					// the overlay and a held key does not toggle it repeatedly.
-					if (isKeyRelease(data) || isKeyRepeat(data)) return { consume: true };
-					sessionRef.current?.toggleCollapsedExternal();
-					if (handle.isHidden() && !hasAnnouncedHide) {
-						hasAnnouncedHide = true;
-						ctx.ui.notify?.(`ask_user_question hidden — press ${collapseKey} to reopen`, "info");
-					}
-					return { consume: true };
-				});
-			}
-			// Local-timeout fallback: when `localTimeoutMs` is configured (and remote
-			// credentials exist), an unanswered local dialog hands the remaining
-			// questions over to Feishu. The timer only starts for the TUI path — the
-			// RPC walker above returned already.
-			const localTimeoutMs = getLocalTimeoutMs(remoteCfg);
-			let localTimer: ReturnType<typeof setTimeout> | undefined;
-			let timedOut = false;
-			if (localTimeoutMs !== undefined) {
-				localTimer = setTimeout(() => {
-					timedOut = true;
-					sessionRef.current?.extractPartialAnswersAndClose();
-				}, localTimeoutMs);
-				// A stray timer must not hold a non-TUI embedder's process open.
-				localTimer.unref?.();
-			}
-
-			emitAskUserBlockedEvent(pi, true);
-			try {
-				const result = await ctx.ui.custom<QuestionnaireResult>(
-					(tui, theme, keybindings, done) => {
-						const session = new QuestionnaireSession({
-							tui,
-							theme,
-							params: typed,
-							itemsByTab,
-							done,
-							keybindings,
-							editInput: async (value) => {
-								try {
-									const [{ SettingsManager }, { editWithExternalEditor }] = await Promise.all([
-										import("@earendil-works/pi-coding-agent"),
-										import("./state/external-editor.js"),
-									]);
-									const editorCommand = SettingsManager.create(ctx.cwd, undefined, {
-										projectTrusted: ctx.isProjectTrusted(),
-									}).getExternalEditorCommand();
-									if (!editorCommand) throw new Error("No external editor command is configured");
-									return await editWithExternalEditor(tui, editorCommand, value);
-								} catch (error) {
-									const message = error instanceof Error ? error.message : String(error);
-									ctx.ui.notify(`${t("editor.failed", "External editor failed")}: ${message}`, "error");
-									return undefined;
-								}
-							},
-							collapseKey,
-						});
-						sessionRef.current = session;
-						return session.component;
-					},
-					{
-						overlay: true,
-						overlayOptions: {
-							anchor: "bottom-center",
-							width: "100%",
-							maxHeight: "100%",
-							margin: { left: 0, right: 0, bottom: 0 },
-						},
-						onHandle: (handle) => {
-							overlayHandleRef.current = handle;
-							sessionRef.current?.setOverlayHandle(handle);
-						},
-					},
-				);
-
-				// A TUI questionnaire ALWAYS resolves a QuestionnaireResult (cancel
-				// included — state-reducer emits `{ answers, cancelled }`), so
-				// `undefined` uniquely means "host cannot render", never "user
-				// declined". RPC builds that predate ctx.mode land here: run the
-				// dialog walker when the host has the primitives; otherwise tell the
-				// model the user never saw the questions.
-				if (result === undefined) {
-					if (hasDialogUI(ctx.ui)) {
-						return buildQuestionnaireResponse(await runRpcQuestionnaire(ctx.ui, typed), typed);
-					}
-					return buildToolResult(ERROR_NO_CUSTOM_UI, { answers: [], cancelled: true, error: "no_custom_ui" });
-				}
-
-				// User cancelled (Esc) — never hand off to Feishu; respect the decline.
-				if (result.cancelled) return buildQuestionnaireResponse(result, typed);
-
-				// Local timeout fired: forward the still-unanswered questions to Feishu
-				// and merge the local answers back into the envelope.
-				if (timedOut) {
-					const answered = new Set(result.answers.map((a) => a.questionIndex));
-					const remaining = typed.questions
-						.map((q, i) => ({ question: q, index: i }))
-						.filter(({ index }) => !answered.has(index));
-					if (remaining.length > 0) {
-						ctx.ui.notify?.(
-							t("remote.fallback_notify", "Local wait timed out — remaining questions sent to Feishu"),
-							"info",
-						);
-						const outcome = await runRemoteQuestionnaireWithConnect(ctx, remaining, remoteCfg);
-						if (outcome.kind === "answered") {
-							return buildQuestionnaireResponse(
-								{
-									answers: [...result.answers, ...outcome.result.answers],
-									cancelled: outcome.result.cancelled,
-								},
-								typed,
-							);
-						}
-						return buildToolResult(outcome.message, {
-							answers: [...result.answers, ...outcome.partialAnswers],
-							cancelled: true,
-						});
-					}
-				}
-
-				return buildQuestionnaireResponse(result, typed);
-			} finally {
-				if (localTimer !== undefined) clearTimeout(localTimer);
-				removeOverlayInputListener?.();
-				emitAskUserBlockedEvent(pi, false);
-			}
+			return localOutcomeEnvelope(await runLocalQuestionnaire(pi, ctx, typed, remoteCfg), typed);
 		},
 	});
 
@@ -409,6 +290,307 @@ async function runRemoteQuestionnaireWithConnect(
 			partialAnswers: [],
 		};
 	}
+}
+
+/**
+ * Connect a Telegram transport (proxy-aware) and run the ask-prd questionnaire.
+ * Connect failures are classified and surfaced as an LLM-facing failure envelope —
+ * the user never saw the questions, so this is NOT a decline.
+ */
+async function runTgQuestionnaireWithConnect(
+	ctx: { ui: { notify?: (msg: string, level: "info" | "error") => void } },
+	questions: RemoteQuestion[],
+	cfg: RemoteConfig,
+): Promise<RemoteOutcome> {
+	try {
+		const transport = createTgTransport(cfg.tg);
+		try {
+			return await runTgQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
+		} finally {
+			await transport.close();
+		}
+	} catch (err) {
+		const { code, message } = classifyRemoteError(err);
+		return {
+			kind: "failed",
+			message: `${ERROR_TG_CONNECT_FAILED} (code ${code} — ${message})`,
+			partialAnswers: [],
+		};
+	}
+}
+
+type LocalQuestionnaireOutcome =
+	| { kind: "answered"; result: QuestionnaireResult }
+	| { kind: "failed"; message: string; result: QuestionnaireResult };
+
+/** Structural slice of the tool exec context the local flows need. */
+type LocalQuestionnaireCtx = {
+	cwd: string;
+	isProjectTrusted: () => boolean;
+	mode?: string;
+	ui: ExtensionUIContext;
+};
+
+/** Map a local-flow outcome to the LLM-facing tool envelope. */
+function localOutcomeEnvelope(outcome: LocalQuestionnaireOutcome, params: QuestionParams) {
+	return outcome.kind === "answered"
+		? buildQuestionnaireResponse(outcome.result, params)
+		: buildToolResult(outcome.message, outcome.result);
+}
+
+/**
+ * Run the questionnaire in the main conversation — the RPC dialog walker for
+ * RPC hosts, the tabbed TUI overlay otherwise. Shared by the primary path and
+ * by the remote-timeout recovery, which re-asks the still-unanswered
+ * questions here. `enableLocalTimeout` is switched off during recovery so a
+ * second silence ends in the local ask instead of bouncing back to Feishu.
+ */
+async function runLocalQuestionnaire(
+	pi: ExtensionAPI,
+	ctx: LocalQuestionnaireCtx,
+	typed: QuestionParams,
+	remoteCfg: RemoteConfig,
+	options: { enableLocalTimeout?: boolean } = {},
+): Promise<LocalQuestionnaireOutcome> {
+	const enableLocalTimeout = options.enableLocalTimeout ?? true;
+
+	// RPC hosts (VSCode pendant, ACP clients like Zed/Paseo — issue #78):
+	// ui.custom() cannot render there, but the select/input dialog
+	// sub-protocol works. Hosts that advertise ctx.mode (pi ≥0.79) route to
+	// the sequential dialog walker up front, skipping the TUI render-graph
+	// import entirely; RPC builds that predate ctx.mode are caught by the
+	// custom()-resolved-undefined backstop below. See ./rpc-fallback.ts.
+	if (ctx.mode === "rpc" && hasDialogUI(ctx.ui)) {
+		emitAskUserBlockedEvent(pi, true);
+		try {
+			return { kind: "answered", result: await runRpcQuestionnaire(ctx.ui, typed) };
+		} finally {
+			emitAskUserBlockedEvent(pi, false);
+		}
+	}
+
+	const itemsByTab: WrappingSelectItem[][] = typed.questions.map((q) => buildItemsForQuestion(q));
+
+	// Lazy — QuestionnaireSession pulls the ~560ms view/TUI render graph;
+	// load it only when the tool runs, not at extension registration.
+	const sessionLoad = await loadQuestionnaireSession();
+	if (!sessionLoad.ok) {
+		return {
+			kind: "failed",
+			message: sessionLoad.message,
+			result: { answers: [], cancelled: true, error: sessionLoad.error },
+		};
+	}
+	const { QuestionnaireSession } = sessionLoad.module;
+	// Resolve the collapse/expand key spec from config. Default is `ctrl+]`; users
+	// with non-US layouts (e.g. Latin American, where `]` is shifted) can override
+	// via the `collapseKey` config field. `resolveCollapseKey` also accepts the
+	// sentinel value `"off"` to disable the shortcut entirely.
+	const collapseKey = resolveCollapseKey(loadConfig());
+
+	// Capture the overlay handle so the session can call `setHidden()` when the
+	// user toggles collapse, and register a raw terminal input listener for the
+	// same key so the toggle still works while the overlay is hidden (pi-tui does
+	// not route input to a hidden overlay's `component.handleInput`).
+	const sessionRef: {
+		current: import("./state/questionnaire-session.js").QuestionnaireSession | null;
+	} = { current: null };
+	const overlayHandleRef: { current: import("@earendil-works/pi-tui").OverlayHandle | undefined } = {
+		current: undefined,
+	};
+	let hasAnnouncedHide = false;
+	let removeOverlayInputListener: (() => void) | undefined;
+
+	if (collapseKey !== "off" && typeof ctx.ui.onTerminalInput === "function") {
+		removeOverlayInputListener = ctx.ui.onTerminalInput((data) => {
+			const handle = overlayHandleRef.current;
+			if (!handle) return undefined;
+			// Only act while the questionnaire is hidden (its handleInput is
+			// unreachable) or actually focused. When some other overlay is on
+			// top (e.g. `/btw`), leave the keystroke to that overlay instead of
+			// toggling the questionnaire from underneath it.
+			if (!handle.isHidden() && !handle.isFocused()) return undefined;
+			if (!matchesKey(data, collapseKey as Parameters<typeof matchesKey>[1])) return undefined;
+			// Kitty-protocol terminals report press, repeat, and release separately.
+			// Toggle only on the initial press so a tap does not immediately reopen
+			// the overlay and a held key does not toggle it repeatedly.
+			if (isKeyRelease(data) || isKeyRepeat(data)) return { consume: true };
+			sessionRef.current?.toggleCollapsedExternal();
+			if (handle.isHidden() && !hasAnnouncedHide) {
+				hasAnnouncedHide = true;
+				ctx.ui.notify?.(`ask_user_question hidden — press ${collapseKey} to reopen`, "info");
+			}
+			return { consume: true };
+		});
+	}
+	// Local-timeout fallback: when `localTimeoutMs` is configured (and remote
+	// credentials exist), an unanswered local dialog hands the remaining
+	// questions over to Feishu. The timer only starts for the TUI path — the
+	// RPC walker above returned already.
+	const localTimeoutMs = enableLocalTimeout ? getLocalTimeoutMs(remoteCfg) : undefined;
+	let localTimer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	if (localTimeoutMs !== undefined) {
+		localTimer = setTimeout(() => {
+			timedOut = true;
+			sessionRef.current?.extractPartialAnswersAndClose();
+		}, localTimeoutMs);
+		// A stray timer must not hold a non-TUI embedder's process open.
+		localTimer.unref?.();
+	}
+
+	emitAskUserBlockedEvent(pi, true);
+	try {
+		const result = await ctx.ui.custom<QuestionnaireResult>(
+			(tui, theme, keybindings, done) => {
+				const session = new QuestionnaireSession({
+					tui,
+					theme,
+					params: typed,
+					itemsByTab,
+					done,
+					keybindings,
+					editInput: async (value) => {
+						try {
+							const [{ SettingsManager }, { editWithExternalEditor }] = await Promise.all([
+								import("@earendil-works/pi-coding-agent"),
+								import("./state/external-editor.js"),
+							]);
+							const editorCommand = SettingsManager.create(ctx.cwd, undefined, {
+								projectTrusted: ctx.isProjectTrusted(),
+							}).getExternalEditorCommand();
+							if (!editorCommand) throw new Error("No external editor command is configured");
+							return await editWithExternalEditor(tui, editorCommand, value);
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							ctx.ui.notify(`${t("editor.failed", "External editor failed")}: ${message}`, "error");
+							return undefined;
+						}
+					},
+					collapseKey,
+				});
+				sessionRef.current = session;
+				return session.component;
+			},
+			{
+				overlay: true,
+				overlayOptions: {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: { left: 0, right: 0, bottom: 0 },
+				},
+				onHandle: (handle) => {
+					overlayHandleRef.current = handle;
+					sessionRef.current?.setOverlayHandle(handle);
+				},
+			},
+		);
+
+		// A TUI questionnaire ALWAYS resolves a QuestionnaireResult (cancel
+		// included — state-reducer emits `{ answers, cancelled }`), so
+		// `undefined` uniquely means "host cannot render", never "user
+		// declined". RPC builds that predate ctx.mode land here: run the
+		// dialog walker when the host has the primitives; otherwise tell the
+		// model the user never saw the questions.
+		if (result === undefined) {
+			if (hasDialogUI(ctx.ui)) {
+				return { kind: "answered", result: await runRpcQuestionnaire(ctx.ui, typed) };
+			}
+			return {
+				kind: "failed",
+				message: ERROR_NO_CUSTOM_UI,
+				result: { answers: [], cancelled: true, error: "no_custom_ui" },
+			};
+		}
+
+		// User cancelled (Esc) — never hand off to Feishu; respect the decline.
+		if (result.cancelled) return { kind: "answered", result };
+
+		// Local timeout fired: forward the still-unanswered questions to Feishu
+		// and merge the local answers back into the envelope.
+		if (timedOut) {
+			const answered = new Set(result.answers.map((a) => a.questionIndex));
+			const remaining = typed.questions
+				.map((q, i) => ({ question: q, index: i }))
+				.filter(({ index }) => !answered.has(index));
+			if (remaining.length > 0) {
+				ctx.ui.notify?.(
+					t("remote.fallback_notify", "Local wait timed out — remaining questions sent to Feishu"),
+					"info",
+				);
+				const outcome = await runRemoteQuestionnaireWithConnect(ctx, remaining, remoteCfg);
+				if (outcome.kind === "answered") {
+					return {
+						kind: "answered",
+						result: {
+							answers: [...result.answers, ...outcome.result.answers],
+							cancelled: outcome.result.cancelled,
+						},
+					};
+				}
+				// Feishu also stayed silent — recover to the main conversation.
+				if (outcome.kind === "timed_out") {
+					const recovered = await recoverFromRemoteTimeout(pi, ctx, remaining, outcome, remoteCfg);
+					if (recovered.kind === "failed") return recovered;
+					return {
+						kind: "answered",
+						result: {
+							answers: [...result.answers, ...recovered.result.answers],
+							cancelled: recovered.result.cancelled,
+						},
+					};
+				}
+				return {
+					kind: "failed",
+					message: outcome.message,
+					result: { answers: [...result.answers, ...outcome.partialAnswers], cancelled: true },
+				};
+			}
+		}
+
+		return { kind: "answered", result };
+	} finally {
+		if (localTimer !== undefined) clearTimeout(localTimer);
+		removeOverlayInputListener?.();
+		emitAskUserBlockedEvent(pi, false);
+	}
+}
+
+/**
+ * Feishu wait timed out with no reply: re-ask the still-unanswered questions
+ * in the main conversation (local TUI / RPC ask). Answers keep their ORIGINAL
+ * `questionIndex` — local answers are remapped through `questions` so the
+ * merged envelope stays aligned with the caller's original `typed.questions`.
+ */
+async function recoverFromRemoteTimeout(
+	pi: ExtensionAPI,
+	ctx: LocalQuestionnaireCtx,
+	questions: RemoteQuestion[],
+	outcome: Extract<RemoteOutcome, { kind: "timed_out" }>,
+	remoteCfg: RemoteConfig,
+): Promise<LocalQuestionnaireOutcome> {
+	const answered = new Set(outcome.partialAnswers.map((a) => a.questionIndex));
+	const remaining = questions.filter(({ index }) => !answered.has(index));
+	if (remaining.length === 0) {
+		return { kind: "answered", result: { answers: outcome.partialAnswers, cancelled: false } };
+	}
+	ctx.ui.notify?.(
+		t("remote.timeout_recover", "No reply from Feishu — asking in the main conversation instead"),
+		"info",
+	);
+	const local = await runLocalQuestionnaire(pi, ctx, { questions: remaining.map((r) => r.question) }, remoteCfg, {
+		enableLocalTimeout: false,
+	});
+	if (local.kind === "failed") return local;
+	const remapped = local.result.answers.map((a) => ({
+		...a,
+		questionIndex: remaining[a.questionIndex]?.index ?? a.questionIndex,
+	}));
+	return {
+		kind: "answered",
+		result: { answers: [...outcome.partialAnswers, ...remapped], cancelled: local.result.cancelled },
+	};
 }
 
 export { buildQuestionnaireResponse, buildToolResult };

@@ -11,7 +11,15 @@ function remoteConfig(over: Partial<RemoteConfig> = {}): RemoteConfig {
 		timeoutMs: 600_000,
 		cancelWords: ["取消", "cancel"],
 		feishu: { appId: "", appSecret: "", receivers: [], useCards: true },
-		tg: { botToken: "t", chatId: "c", userId: 1, username: undefined, useCards: true, timeoutMs: 1_000, proxy: undefined },
+		tg: {
+			botToken: "t",
+			chatId: "c",
+			userId: 1,
+			username: undefined,
+			useCards: true,
+			timeoutMs: 1_000,
+			proxy: undefined,
+		},
 		...over,
 	};
 }

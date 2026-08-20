@@ -36,5 +36,7 @@
   "remote.msg.multi_hint": "回复所有适用选项的编号，用逗号分隔（例如 \"1,3\"），或直接输入自定义回答；回复 \"取消\" 或 \"cancel\" 中止。",
   "remote.sent": "问题已发送到飞书，请在飞书中回复",
   "remote.please_text": "请回复文本（表情/图片无法作为回答）",
-  "remote.fallback_notify": "本地等待超时，剩余问题已发送到飞书"
+  "remote.fallback_notify": "本地等待超时，剩余问题已发送到飞书",
+  "remote.timeout_recover": "飞书超时无回复，改在主对话中重新提问",
+  "remote.tg_sent": "问题已发送到 Telegram，请被 @ 的用户在群里回复"
 }

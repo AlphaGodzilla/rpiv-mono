@@ -241,6 +241,75 @@ describe("ask_user_question — Feishu remote as primary mode", () => {
 		expect(text).toContain("permission_denied");
 		expect(text).toContain("do NOT treat this as a decline");
 	});
+	it("recovers to the local ask when the Feishu wait times out, merging answers by original index", async () => {
+		const transport = makeTransport();
+		vi.mocked(transport.waitForReply)
+			.mockResolvedValueOnce({ text: "1", chatId: "oc_x", chatType: "p2p", senderId: "ou_1", messageId: "om_1" })
+			.mockResolvedValueOnce(null);
+		createFeishuTransportMock.mockResolvedValue(transport);
+		const h = makeHarness();
+		const twoQuestions = makeParams({
+			questions: [
+				{
+					question: "Q1",
+					header: "H1",
+					options: [
+						{ label: "A", description: "a" },
+						{ label: "B", description: "b" },
+					],
+				},
+				{
+					question: "Q2",
+					header: "H2",
+					options: [
+						{ label: "X", description: "x" },
+						{ label: "Y", description: "y" },
+					],
+				},
+			],
+		});
+
+		const pending = h.execute("t1", twoQuestions, undefined, undefined, h.ctx);
+
+		// Q1 answered on Feishu; Q2 times out → the local dialog re-asks Q2.
+		await vi.waitFor(() => {
+			expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+		});
+		h.resolveCustom({
+			answers: [{ questionIndex: 0, question: "Q2", kind: "option", answer: "Y" }],
+			cancelled: false,
+		});
+		const result = await pending;
+
+		const content = (result as { content: { text: string }[] }).content[0].text;
+		expect(content).toContain('"Q1"="A"');
+		expect(content).toContain('"Q2"="Y"');
+		expect(transport.close).toHaveBeenCalledTimes(1);
+		// Blocked stays ON across the whole wait (remote + local recovery); the
+		// inner local dialog closes first, then the outer remote wait.
+		const emits = h.events.emit.mock.calls
+			.filter(([name]) => name === "rpiv:ask-user:blocked")
+			.map(([, payload]) => payload);
+		expect(emits).toEqual([{ active: true }, { active: true }, { active: false }, { active: false }]);
+	});
+
+	it("re-asks ALL questions locally when every Feishu wait times out and the user cancels", async () => {
+		const transport = makeTransport();
+		vi.mocked(transport.waitForReply).mockResolvedValue(null);
+		createFeishuTransportMock.mockResolvedValue(transport);
+		const h = makeHarness();
+
+		const pending = h.execute("t1", makeParams(), undefined, undefined, h.ctx);
+
+		await vi.waitFor(() => {
+			expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+		});
+		h.resolveCustom({ answers: [], cancelled: true });
+		const result = await pending;
+
+		const text = (result as { content: { text: string }[] }).content[0].text;
+		expect(text).toContain("User declined to answer questions");
+	});
 });
 
 describe("ask_user_question — local timeout fallback", () => {
@@ -386,5 +455,29 @@ describe("ask_user_question — local timeout fallback", () => {
 		const text = (result as { content: { text: string }[] }).content[0].text;
 		expect(text).toContain("never saw the questions");
 		expect(text).toContain("not_connected");
+	});
+	it("recovers to the local ask when the Feishu handoff also times out", async () => {
+		loadConfigMock.mockReturnValue({ remote: fullRemoteConfig(false, 5_000) });
+		const transport = makeTransport();
+		vi.mocked(transport.waitForReply).mockResolvedValue(null);
+		createFeishuTransportMock.mockResolvedValue(transport);
+		const h = makeHarness();
+
+		const pending = h.execute("t1", makeParams(), undefined, undefined, h.ctx);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+
+		// Local timeout fires → hand off to Feishu → Feishu also stays silent →
+		// the local dialog opens again for the still-unanswered question.
+		await vi.advanceTimersByTimeAsync(4_900);
+		expect(h.ctx.ui.custom).toHaveBeenCalledTimes(2);
+		h.resolveCustom({
+			answers: [{ questionIndex: 0, question: "Which library?", kind: "option", answer: "B" }],
+			cancelled: false,
+		});
+		const result = await pending;
+
+		const content = (result as { content: { text: string }[] }).content[0].text;
+		expect(content).toContain('"Which library?"="B"');
 	});
 });

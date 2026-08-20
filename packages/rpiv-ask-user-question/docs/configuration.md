@@ -126,7 +126,7 @@ identical to a version without this feature.
 | --- | --- | --- |
 | `enabled` | Remote as the primary mode: every questionnaire is sent to Feishu. | `false` |
 | `localTimeoutMs` | Local-timeout fallback threshold. **Only when configured** does an unanswered local dialog hand its remaining questions to Feishu after this many milliseconds. Absent → no local timeout, original flow. | not set |
-| `timeoutMs` | How long to wait for a Feishu reply per question before cancelling. | `600000` (10 min) |
+| `timeoutMs` | How long to wait for a Feishu reply per question. On timeout the unanswered questions are re-asked in the main conversation instead of being treated as a decline. | `600000` (10 min) |
 | `cancelWords` | Exact-match words (after trim, case-insensitive) that abort the remote questionnaire. | `["取消", "cancel"]` |
 | `feishu.appId` / `feishu.appSecret` | Credentials of a Feishu enterprise self-built app (开发者后台 → 凭证与基础信息). | — |
 | `feishu.receivers` | Who receives the questions. Each entry is `{ "type", "value" }`; `type` is one of `open_id`, `user_id`, `union_id`, `email`, `chat_id` (the native `receive_id_type` values — no phone lookup). Invalid entries are dropped. | `[]` |
@@ -148,8 +148,11 @@ Each question is sent as one message to every receiver; the first matching reply
 (`Type something.`-style custom answers are plain text, option numbers select options,
 multi-select accepts `1,3`). In group chats the bot only reacts to messages that @ it; in
 private chats any message answers the pending question. Non-text messages (stickers,
-images) are ignored with a hint. A cancel word or a per-question timeout cancels the whole
-questionnaire (`cancelled: true`).
+images) are ignored with a hint. A cancel word cancels the whole questionnaire
+(`cancelled: true`); a per-question timeout instead recovers to the main
+conversation — the still-unanswered questions are re-asked in the local dialog
+(and the local-timeout handoff comes back to the local ask too if Feishu stays
+silent).
 
 With `feishu.useCards` (default) a single-select question arrives as an interactive card
 with one button per option plus a Cancel button. Clicking a button answers immediately
@@ -158,21 +161,50 @@ is disabled so a repeated click cannot double-fire. Text replies keep working al
 buttons, and card send failures fall back to plain text.
 
 
-#### `/remote-ask` command
+#### `/rpiv-ask-user-question` command
 
-`/remote-ask` toggles or inspects the mode and writes `remote.enabled` back to this file
-(preserving every other field, in the same file the loader actually reads). Every
-invocation prints a status notification:
+The single command for both remote-asking channels (it replaced the old `/remote-ask`):
 
 ```
-/remote-ask          → toggle ON/OFF
-/remote-ask on       → enable (errors if credentials are missing)
-/remote-ask off      → disable
-/remote-ask status   → show mode, local fallback, wait timeout, credentials, receivers
+/rpiv-ask-user-question                   → usage + combined status of both channels
+/rpiv-ask-user-question status            → same
+/rpiv-ask-user-question remote on         → enable Feishu remote (errors if credentials are missing)
+/rpiv-ask-user-question remote off        → disable
+/rpiv-ask-user-question remote status     → Feishu mode, local fallback, wait timeout, credentials, receivers
+/rpiv-ask-user-question prd on            → enable session-level ask-prd (Telegram; errors if tg credentials are missing)
+/rpiv-ask-user-question prd off           → disable
+/rpiv-ask-user-question prd status        → ask-prd state, tg wait timeout, tg credentials
 ```
 
-The command requires an interactive session, and a failed write never reports success.
-Malformed values in the file still fall back to defaults, never to an error.
+The `remote` subcommand writes `remote.enabled` back to this file (preserving every other
+field, in the same file the loader actually reads). The `prd` subcommand is session-scoped:
+it lives in memory keyed by the current session id and resets on every new/restored
+session — it never writes config.json. The command requires an interactive session, and a
+failed write never reports success. Malformed values in the file still fall back to
+defaults, never to an error.
+
+### `remote.tg` — ask-prd (Telegram)
+
+`ask-prd` is a **session-level** mode: while it is on (`/rpiv-ask-user-question prd on`),
+every questionnaire is sent by a Telegram bot to a chat and @-mentions a specified user,
+and **all Feishu logic is skipped** (both the `remote` primary mode and the local-timeout
+fallback to Feishu). Only the configured @-user's replies/button clicks count as answers.
+
+| Field | What it does | Default |
+| --- | --- | --- |
+| `tg.botToken` | Telegram bot token (from @BotFather). | — |
+| `tg.chatId` | Target chat id (group/supergroup ids are negative, kept as a string). The bot and the @-user must be members. | — |
+| `tg.userId` | The @-mentioned user's numeric id; **only** this user's replies/button clicks are accepted. | — |
+| `tg.username` | Optional public username (e.g. `"@alice"`) used for the visible @ mention. | absent → `@user(<id>)` |
+| `tg.useCards` | Send questions as inline-keyboard cards (one button per option + Cancel; clicking answers and locks the card). Multi-select still takes a text reply (`1,2`). Card sends fall back to plain text. | `true` |
+| `tg.timeoutMs` | How long to wait for the @-user's reply per question. **Independent of the Feishu `timeoutMs`** — Telegram messages are not expected to be answered quickly. On timeout the unanswered questions are re-asked in the main conversation. | `1800000` (30 min) |
+| `tg.proxy` | Optional HTTP(S) proxy (e.g. `"http://127.0.0.1:6152"`). Falls back to `HTTPS_PROXY`/`HTTP_PROXY` env, then the macOS system proxy (`scutil`), then a direct connection. Needed where Telegram requires a proxy (Node's global fetch cannot use the system proxy). | auto |
+
+A bot in **privacy mode** only receives @-mentions, replies to its own messages, and
+commands in a group — plain-text replies from the @-user would be missed. To let the
+@-user answer with any text, disable Group Privacy for the bot (BotFather → Bot Settings →
+Group Privacy → Turn off). The bot token must not be polled by any other process, or
+`getUpdates` fails with 409.
 
 
 ## Environment variables

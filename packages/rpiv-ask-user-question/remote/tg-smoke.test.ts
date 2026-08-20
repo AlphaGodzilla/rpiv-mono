@@ -37,32 +37,25 @@ function cfg(): RemoteConfig {
 }
 
 describe.runIf(enabled && token.length > 0 && chatId.length > 0 && userId > 0)("tg-smoke (ask-prd real bot)", () => {
-	it(
-		"sends a question card to the chat and resolves the @-user's button click / text reply",
-		async () => {
-			const remote = cfg();
-			const transport = createTgTransport(remote.tg, { log: (m) => console.log("[tg-smoke]", m) });
-			try {
-				const question = makeQuestion({
-					header: "冒烟测试",
-					question: "请点击下方选项按钮，或直接回复文本（1 或 2）",
-					options: [
-						{ label: "选项A", description: "第一个选项" },
-						{ label: "选项B", description: "第二个选项" },
-					],
-				});
-				const outcome = await runTgQuestionnaire(
-					transport,
-					[{ question, index: 0 }],
-					remote,
-					(message, level) => console.log(`[tg-smoke:${level}]`, message),
-				);
-				console.log("[tg-smoke] outcome:", JSON.stringify(outcome));
-				expect(outcome.kind).toBe("answered");
-			} finally {
-				await transport.close();
-			}
-		},
-		130_000,
-	);
+	it("sends a question card to the chat and resolves the @-user's button click / text reply", async () => {
+		const remote = cfg();
+		const transport = createTgTransport(remote.tg, { log: (m) => console.log("[tg-smoke]", m) });
+		try {
+			const question = makeQuestion({
+				header: "冒烟测试",
+				question: "请点击下方选项按钮，或直接回复文本（1 或 2）",
+				options: [
+					{ label: "选项A", description: "第一个选项" },
+					{ label: "选项B", description: "第二个选项" },
+				],
+			});
+			const outcome = await runTgQuestionnaire(transport, [{ question, index: 0 }], remote, (message, level) =>
+				console.log(`[tg-smoke:${level}]`, message),
+			);
+			console.log("[tg-smoke] outcome:", JSON.stringify(outcome));
+			expect(outcome.kind).toBe("answered");
+		} finally {
+			await transport.close();
+		}
+	}, 130_000);
 });

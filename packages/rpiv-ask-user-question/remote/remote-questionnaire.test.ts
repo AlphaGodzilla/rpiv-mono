@@ -95,15 +95,16 @@ describe("runRemoteQuestionnaire", () => {
 		expect(outcome.result.answers[0].questionIndex).toBe(0);
 	});
 
-	it("cancels the whole questionnaire when a per-question wait times out", async () => {
+	it("reports timed_out with the answers collected so far when a per-question wait times out", async () => {
 		const transport = makeTransport();
 		vi.mocked(transport.waitForReply).mockResolvedValueOnce(reply("1")).mockResolvedValueOnce(null);
 
 		const outcome = await runRemoteQuestionnaire(transport, questions, makeCfg({ timeoutMs: 500 }, false), vi.fn());
 
-		expect(outcome.kind).toBe("answered");
-		if (outcome.kind !== "answered") return;
-		expect(outcome.result.cancelled).toBe(true);
+		expect(outcome.kind).toBe("timed_out");
+		if (outcome.kind !== "timed_out") return;
+		expect(outcome.partialAnswers).toHaveLength(1);
+		expect(outcome.partialAnswers[0].questionIndex).toBe(0);
 	});
 
 	it("routes the timeout from cfg into waitForReply", async () => {
