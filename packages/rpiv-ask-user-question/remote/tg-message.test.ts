@@ -91,7 +91,7 @@ describe("buildTgAnswerNote", () => {
 
 	it("notes a cancel", () => {
 		const q = makeQuestion();
-		expect(buildTgAnswerNote(q, undefined, true)).toBe("\n\n已取消");
+		expect(buildTgAnswerNote(q, undefined, true)).toBe("\n\n❌ 已取消");
 	});
 
 	it("escapes HTML characters in the option label", () => {

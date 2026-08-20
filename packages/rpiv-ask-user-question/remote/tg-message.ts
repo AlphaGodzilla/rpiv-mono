@@ -86,7 +86,7 @@ function escapeHtml(text: string): string {
  * after the buttons are removed. Leading blank lines separate it from the body.
  */
 export function buildTgAnswerNote(q: QuestionData, optionNum: number | undefined, isCancel: boolean): string {
-	if (isCancel) return "\n\n已取消";
+	if (isCancel) return "\n\n❌ 已取消";
 	const label =
 		optionNum !== undefined && Number.isInteger(optionNum) ? q.options[optionNum - 1]?.label : undefined;
 	return label === undefined ? "\n\n✅ 已选择" : `\n\n✅ 已选择：${escapeHtml(label)}`;
