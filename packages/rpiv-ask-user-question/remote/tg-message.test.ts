@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { makeQuestion } from "../test-fixtures.js";
 import type { TgRemoteConfig } from "./remote-config.js";
-import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
+import {
+	buildTgAnswerNote,
+	buildTgDoneKeyboard,
+	buildTgKeyboard,
+	buildTgQuestionMessage,
+	type TgButtonValue,
+} from "./tg-message.js";
 
 function tgCfg(over: Partial<TgRemoteConfig> = {}): TgRemoteConfig {
 	return {
@@ -46,7 +52,7 @@ describe("buildTgQuestionMessage", () => {
 });
 
 describe("buildTgKeyboard", () => {
-	it("single-select: one button per option (3 per row) plus a trailing cancel row", () => {
+	it("single-select: one button per option (3 per row), no cancel button", () => {
 		const q = makeQuestion({
 			options: [
 				{ label: "A", description: "a" },
@@ -56,7 +62,7 @@ describe("buildTgKeyboard", () => {
 			],
 		});
 		const { rows } = parseKeyboard(buildTgKeyboard(q, 1));
-		expect(rows).toHaveLength(3); // [A,B,C] [D] [取消]
+		expect(rows).toHaveLength(2); // [A,B,C] [D] — no cancel row
 		expect(rows[0].map((b) => b.text)).toEqual(["A", "B", "C"]);
 		expect(rows[0].map((b) => b.value)).toEqual([
 			{ q: "1", o: "1" },
@@ -65,15 +71,11 @@ describe("buildTgKeyboard", () => {
 		]);
 		expect(rows[1].map((b) => b.text)).toEqual(["D"]);
 		expect(rows[1][0].value).toEqual({ q: "1", o: "4" });
-		expect(rows[2].map((b) => b.text)).toEqual(["取消"]);
-		expect(rows[2][0].value).toEqual({ q: "1", c: "1" });
 	});
 
-	it("multi-select: no option buttons, only a cancel button", () => {
+	it("multi-select: no buttons at all (text reply 1,2)", () => {
 		const q = makeQuestion({ multiSelect: true });
-		const { rows } = parseKeyboard(buildTgKeyboard(q, 0));
-		expect(rows).toHaveLength(1);
-		expect(rows[0].map((b) => b.text)).toEqual(["取消"]);
+		expect(buildTgKeyboard(q, 0)).toEqual({ inline_keyboard: [] });
 	});
 });
 
@@ -85,7 +87,12 @@ describe("buildTgDoneKeyboard", () => {
 
 describe("buildTgAnswerNote", () => {
 	it("notes the chosen option label", () => {
-		const q = makeQuestion({ options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] });
+		const q = makeQuestion({
+			options: [
+				{ label: "A", description: "a" },
+				{ label: "B", description: "b" },
+			],
+		});
 		expect(buildTgAnswerNote(q, 2, false)).toBe("\n\n✅ 已选择：B");
 	});
 

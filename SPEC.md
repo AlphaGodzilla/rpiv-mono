@@ -220,10 +220,11 @@ export function buildTgLockedKeyboard(q: QuestionData, questionIndex: number, se
 - `username` 已配置 → `<a href="tg://user?id={userId}">{username}</a>`
 - 否则 → `<a href="tg://user?id={userId}">@user({userId})</a>`
 
-**卡片语义（对齐飞书 §feishu-channel / message-format）**：
-- 单选：每个选项一个 inline 按钮（callback_data `{q,o}`），末尾一个取消按钮（`{q,c:"1"}`）；最多 3 个一行。
-- 多选：按钮无法表达选择列表 → 消息带选项文本 + 仅一个取消按钮，用户文本回复 `1,2`（复用 `parseReply` 多选逻辑）。
-- 作答/取消后：`buildTgLockedKeyboard` 锁定（✓/已取消），防重复点击。
+**卡片语义（对齐飞书 §feishu-channel / message-format，ask-prd 不允许取消）**：
+- 单选：每个选项一个 inline 按钮（callback_data `{q,o}`），**无取消按钮**；最多 3 个一行。
+- 多选：按钮无法表达选择列表 → 消息带选项文本 + **无按钮**，用户文本回复 `1,2`（复用 `parseReply` 多选逻辑）。
+- 取消词（文本回复）与旧卡取消回调（`{q,c:"1"}`）一律忽略、继续等待——ask-prd 必须作答，超时才回落本地。
+- 作答后：`buildTgDoneKeyboard` 移除全部按钮 + `editMessageText` 末尾追加 `✅ 已选择：<选项>`，防重复点击。
 
 **Success Criteria**：
 - `buildTgQuestionMessage` 输出含合法 HTML @提及与完整选项文本。

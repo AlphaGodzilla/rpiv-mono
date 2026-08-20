@@ -61,7 +61,7 @@ export async function runTgQuestionnaire(
 				() => {
 					onNotify(t("remote.please_text", "Please reply with text (stickers/images cannot answer)"), "info");
 				},
-				keyboard ? { question, index, cancelWord: cfg.cancelWords[0] ?? "取消" } : undefined,
+				{ question, index, cancelWord: cfg.cancelWords[0] ?? "取消" }, // always: cancel words are ignored, not answered
 			);
 		} catch (err) {
 			const { code, message } = classifyRemoteError(err);

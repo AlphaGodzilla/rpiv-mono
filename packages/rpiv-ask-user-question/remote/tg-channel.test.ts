@@ -197,6 +197,30 @@ describe("waitForReply", () => {
 		expect(reply).toBeNull();
 	});
 
+	it("ignores a cancel click (legacy c=1 callback) and keeps waiting", async () => {
+		let polls = 0;
+		const { transport } = makeTransport(async () => {
+			polls += 1;
+			if (polls === 1) return { ok: true, result: [callbackUpdate({ data: JSON.stringify({ q: "0", c: "1" }) })] };
+			return { ok: true, result: [] };
+		});
+		const question = makeQuestion();
+		const reply = await transport.waitForReply(30, undefined, { question, index: 0, cancelWord: "取消" });
+		expect(reply).toBeNull(); // the cancel click never settles the wait
+	});
+
+	it("ignores a cancel word text reply and keeps waiting", async () => {
+		let polls = 0;
+		const { transport } = makeTransport(async () => {
+			polls += 1;
+			if (polls === 1) return { ok: true, result: [messageUpdate({ text: "取消" })] };
+			return { ok: true, result: [] };
+		});
+		const question = makeQuestion();
+		const reply = await transport.waitForReply(30, undefined, { question, index: 0, cancelWord: "取消" });
+		expect(reply).toBeNull(); // ask-prd cannot be cancelled by text either
+	});
+
 	it("rejects with a classified error on getUpdates 409 conflict", async () => {
 		const { transport } = makeTransport(async () => ({
 			ok: false,

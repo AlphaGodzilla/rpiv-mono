@@ -106,7 +106,10 @@ describe("runTgQuestionnaire", () => {
 		expect(outcome.kind).toBe("timed_out");
 	});
 
-	it("aborts with cancelled=true on a cancel word reply", async () => {
+	it("aborts with cancelled=true on a cancel word reply (defensive: the tg channel now filters cancel words before settling)", async () => {
+		// The real `TgChannel.processMessage` ignores cancel words (ask-prd cannot be
+		// cancelled), so this path is unreachable in production — kept to assert the
+		// parse layer still classifies a cancel reply correctly if it ever surfaces.
 		const { transport } = makeTransport({
 			waitForReply: vi.fn(async () => reply("取消")),
 		});

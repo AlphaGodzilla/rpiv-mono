@@ -40,15 +40,12 @@ function button(text: string, value: TgButtonValue): TgButton {
 	return { text, callback_data: JSON.stringify(value) };
 }
 
-function cancelButton(questionIndex: number): TgButton {
-	return button("取消", { q: String(questionIndex), c: "1" });
-}
-
 /**
- * Inline-keyboard card. Single-select: one button per option (up to 3 per row)
- * plus a trailing Cancel button — clicks answer directly. Multi-select: buttons
- * cannot express a selection list, so the card keeps the option text (in the
- * message body) and only a Cancel button; the user replies with "1,2" text.
+ * Inline-keyboard card for ask-prd: option buttons only — **no Cancel button**
+ * (ask-prd must be answered, not cancelled). Single-select: one button per
+ * option, up to 3 per row. Multi-select: buttons cannot express a selection
+ * list, so the card keeps the option text in the message body and no buttons
+ * at all; the user replies with "1,2" text.
  */
 export function buildTgKeyboard(q: QuestionData, questionIndex: number): object {
 	const rows: TgButton[][] = [];
@@ -62,7 +59,6 @@ export function buildTgKeyboard(q: QuestionData, questionIndex: number): object 
 			);
 		}
 	}
-	rows.push([cancelButton(questionIndex)]);
 	return { inline_keyboard: rows };
 }
 
@@ -87,7 +83,6 @@ function escapeHtml(text: string): string {
  */
 export function buildTgAnswerNote(q: QuestionData, optionNum: number | undefined, isCancel: boolean): string {
 	if (isCancel) return "\n\n❌ 已取消";
-	const label =
-		optionNum !== undefined && Number.isInteger(optionNum) ? q.options[optionNum - 1]?.label : undefined;
+	const label = optionNum !== undefined && Number.isInteger(optionNum) ? q.options[optionNum - 1]?.label : undefined;
 	return label === undefined ? "\n\n✅ 已选择" : `\n\n✅ 已选择：${escapeHtml(label)}`;
 }

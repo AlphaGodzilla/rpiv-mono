@@ -1,4 +1,5 @@
 import type { QuestionData } from "../tool/types.js";
+import { isCancelWord } from "./message-format.js";
 import type { TgRemoteConfig } from "./remote-config.js";
 import { createProxyAwareFetch, type TgFetch } from "./tg-http.js";
 import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
@@ -263,6 +264,12 @@ class TgTransportImpl implements TgTransport {
 			pending.onNonText?.();
 			return;
 		}
+		// ask-prd cannot be cancelled: a cancel word (e.g. "取消") is ignored and the
+		// wait continues until the @-user actually answers.
+		if (pending.card && isCancelWord(text, [pending.card.cancelWord])) {
+			this.log(`cancel word ignored (ask-prd does not allow cancel): ${text}`);
+			return;
+		}
 		this.settle({ text, chatId: Number(chat?.id), messageId: Number(message.message_id) });
 	}
 
@@ -276,13 +283,17 @@ class TgTransportImpl implements TgTransport {
 		const value = this.parseButtonValue(callback.data);
 		if (!value) return;
 		if (!pending.card || String(pending.card.index) !== String(value.q)) return; // stale card
-		const isCancel = value.c === "1";
-		this.log(`callback received from ${from.id} q=${value.q} ${isCancel ? "(cancel)" : ""}`);
+		// ask-prd cannot be cancelled: a cancel callback (legacy card) is ignored.
+		if (value.c === "1") {
+			this.log(`cancel click ignored (ask-prd does not allow cancel) from ${from.id}`);
+			return;
+		}
+		this.log(`callback received from ${from.id} q=${value.q}`);
 		const optionNum = typeof value.o === "string" ? Number.parseInt(value.o, 10) : NaN;
 		const doneKeyboard = buildTgDoneKeyboard();
 		const finalText =
 			buildTgQuestionMessage(pending.card.question, this.cfg) +
-			buildTgAnswerNote(pending.card.question, Number.isFinite(optionNum) ? optionNum : undefined, isCancel);
+			buildTgAnswerNote(pending.card.question, Number.isFinite(optionNum) ? optionNum : undefined, false);
 		void this.callApi("editMessageText", {
 			chat_id: chat.id,
 			message_id: msg.message_id,
@@ -294,12 +305,12 @@ class TgTransportImpl implements TgTransport {
 		});
 		void this.callApi("answerCallbackQuery", {
 			callback_query_id: callback.id,
-			text: isCancel ? "已取消" : "已选择",
+			text: "已选择",
 		}).catch((err) => {
 			this.log(`answer callback failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
 		this.settle({
-			text: isCancel ? pending.card.cancelWord : String(optionNum),
+			text: String(optionNum),
 			chatId: Number(chat.id),
 			messageId: Number(msg.message_id),
 		});
