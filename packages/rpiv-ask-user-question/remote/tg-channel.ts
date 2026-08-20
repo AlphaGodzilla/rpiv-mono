@@ -131,9 +131,16 @@ class TgTransportImpl implements TgTransport {
 	private async sendMessage(text: string, keyboard: object | undefined): Promise<TgSentMessage> {
 		const body: Record<string, unknown> = { chat_id: this.cfg.chatId, text, parse_mode: "HTML" };
 		if (keyboard !== undefined) body.reply_markup = keyboard;
-		const result = (await this.callApi("sendMessage", body)) as { message_id: number; chat: { id: number } };
+		const result = (await this.callApi("sendMessage", body)) as {
+			message_id: number;
+			chat: { id: number };
+			date?: number;
+		};
 		// Any update older than this send predates the question and must not answer it.
-		this.epochSeconds = Math.floor(Date.now() / 1000);
+		// Use the SERVER-provided message date (not the client wall clock) so clock skew
+		// between this machine and Telegram cannot misclassify the question's own card
+		// (or replies to it) as pre-question noise.
+		this.epochSeconds = typeof result.date === "number" ? result.date : Math.floor(Date.now() / 1000);
 		return { chatId: result.chat.id, messageId: result.message_id };
 	}
 
@@ -266,8 +273,6 @@ class TgTransportImpl implements TgTransport {
 		if (!msg) return;
 		const chat = msg.chat as Record<string, unknown> | undefined;
 		if (!chat || String(chat.id) !== this.cfg.chatId) return;
-		// Same pre-question noise guard as for messages.
-		if (typeof msg.date === "number" && msg.date < this.epochSeconds) return;
 		const value = this.parseButtonValue(callback.data);
 		if (!value) return;
 		if (!pending.card || String(pending.card.index) !== String(value.q)) return; // stale card

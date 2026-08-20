@@ -134,6 +134,35 @@ describe("waitForReply", () => {
 		expect(reply).toBeNull();
 	});
 
+	it("accepts a button click on the sent card even when the server clock lags the client (uses server date)", async () => {
+		// The question's SERVER date is older than the client clock (clock skew). The
+		// baseline must be the sendMessage response date, not the client's wall clock,
+		// or the callback on our own card would be mistaken for pre-question noise.
+		const sentDate = 1_700_000_000;
+		const { transport } = makeTransport(async (url) => {
+			if (url.includes("/getUpdates")) {
+				return {
+					ok: true,
+					result: [
+						callbackUpdate({
+							message: { message_id: 222, chat: { id: -100123, type: "supergroup" }, date: sentDate },
+						}),
+					],
+				};
+			}
+			return { ok: true, result: { message_id: 9, chat: { id: -100123 }, date: sentDate } };
+		});
+		const question = makeQuestion({
+			options: [
+				{ label: "A", description: "a" },
+				{ label: "B", description: "b" },
+			],
+		});
+		await transport.sendCard("q", { inline_keyboard: [] });
+		const reply = await transport.waitForReply(1_000, undefined, { question, index: 0, cancelWord: "取消" });
+		expect(reply).not.toBeNull();
+	});
+
 	it("answers a matching button click and locks the card", async () => {
 		const { transport, calls } = makeTransport(async () => ({
 			ok: true,
