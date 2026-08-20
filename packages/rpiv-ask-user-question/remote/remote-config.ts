@@ -47,6 +47,8 @@ export interface TgRemoteConfig {
 	useCards: boolean;
 	/** Per-question wait timeout for tg, INDEPENDENT of the feishu `timeoutMs`. Default 30 minutes. */
 	timeoutMs: number;
+	/** Optional HTTP(S) proxy (e.g. "http://127.0.0.1:6152"). Falls back to env then the macOS system proxy. */
+	proxy: string | undefined;
 }
 
 export interface RemoteConfig {
@@ -102,6 +104,7 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 			username: undefined,
 			useCards: true,
 			timeoutMs: DEFAULT_TG_TIMEOUT_MS,
+			proxy: undefined,
 		},
 	};
 	if (!raw || typeof raw !== "object") return cfg;
@@ -146,6 +149,7 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 		if (typeof tg.useCards === "boolean") cfg.tg.useCards = tg.useCards;
 		if (typeof tg.timeoutMs === "number" && Number.isFinite(tg.timeoutMs) && tg.timeoutMs > 0)
 			cfg.tg.timeoutMs = tg.timeoutMs;
+		if (typeof tg.proxy === "string" && tg.proxy.trim().length > 0) cfg.tg.proxy = tg.proxy.trim();
 	}
 	return cfg;
 }

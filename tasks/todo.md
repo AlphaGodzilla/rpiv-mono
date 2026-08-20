@@ -8,9 +8,9 @@
 **Description:** 新建内存单例管理 `ask-prd` 开关，按 sessionId 键控；`session_start` 事件复位。纯逻辑、不落盘。
 
 **Acceptance criteria:**
-- [ ] `isAskPrdActive(sid)` 仅当 `enabled && sid === state.sessionId` 为 true；其它 sid 永远 false
-- [ ] `setAskPrdEnabled(sid, true/false)` 与 `resetAskPrdState()` 行为正确
-- [ ] `index.ts` 订阅 `pi.on("session_start", ...)` 调用 `resetAskPrdState()`（防御性双保险）
+- [x] `isAskPrdActive(sid)` 仅当 `enabled && sid === state.sessionId` 为 true；其它 sid 永远 false
+- [x] `setAskPrdEnabled(sid, true/false)` 与 `resetAskPrdState()` 行为正确
+- [x] `index.ts` 订阅 `pi.on("session_start", ...)` 调用 `resetAskPrdState()`（防御性双保险）
 
 **Verification:**
 - [ ] Tests pass: `npx vitest run packages/rpiv-ask-user-question/remote/ask-prd-state.test.ts`
@@ -31,9 +31,9 @@
 **Description:** 扩展 `RemoteConfig` 增加 `tg` 段（`TgRemoteConfig`），手工守卫解析（fail-soft），新增 `isTgConfigured` 与 `DEFAULT_TG_TIMEOUT_MS`。
 
 **Acceptance criteria:**
-- [ ] `loadRemoteConfig` 解析 `remote.tg`（botToken/chatId/userId/username/useCards/timeoutMs），缺字段/错类型回默认不 throw
-- [ ] `isTgConfigured` 三条件独立（botToken、chatId 非空，userId>0）
-- [ ] tg 配置不影响飞书 `shouldUseRemote` 判定（互不干扰）
+- [x] `loadRemoteConfig` 解析 `remote.tg`（botToken/chatId/userId/username/useCards/timeoutMs），缺字段/错类型回默认不 throw
+- [x] `isTgConfigured` 三条件独立（botToken、chatId 非空，userId>0）
+- [x] tg 配置不影响飞书 `shouldUseRemote` 判定（互不干扰）
 
 **Verification:**
 - [ ] Tests pass: `npx vitest run packages/rpiv-ask-user-question/remote/remote-config.test.ts`
@@ -52,9 +52,9 @@
 **Description:** 纯函数构建 TG 消息文本（含 HTML @提及 `tg://user?id=` 或 username）、选项/取消 Inline Keyboard、作答后锁定键盘；复用飞书 `parseReply`/`isCancelWord`。
 
 **Acceptance criteria:**
-- [ ] `buildTgQuestionMessage` 输出含合法 HTML @提及 + 完整编号选项文本
-- [ ] `buildTgKeyboard` 单选（每选项一按钮+取消）/多选（仅取消）/取消三种结构正确，callback_data `{q,o,c}` 同飞书（q=题号防旧卡）
-- [ ] `buildTgLockedKeyboard` 作答后 ✓/禁用锁定；纯函数无副作用
+- [x] `buildTgQuestionMessage` 输出含合法 HTML @提及 + 完整编号选项文本
+- [x] `buildTgKeyboard` 单选（每选项一按钮+取消）/多选（仅取消）/取消三种结构正确，callback_data `{q,o,c}` 同飞书（q=题号防旧卡）
+- [x] `buildTgLockedKeyboard` 作答后 ✓/禁用锁定；纯函数无副作用
 
 **Verification:**
 - [ ] Tests pass: `npx vitest run packages/rpiv-ask-user-question/remote/tg-message.test.ts`
@@ -165,12 +165,12 @@
 ---
 
 ## Checkpoint: After Task 1-3（Foundation）
-- [ ] `npx vitest run packages/rpiv-ask-user-question` 全绿
-- [ ] `npm run check` 干净
+- [x] `npx vitest run packages/rpiv-ask-user-question` 全绿 (677 passed)
+- [x] `npm run check`（tsc 通过 + 改动文件 biome 干净；根目录 biome 路径问题为既有，见下）
 - [ ] 与人类复核一次再继续
 
 ## Checkpoint: After Task 4-5（Transport）
-- [ ] tg-channel / tg-questionnaire 单测全绿（mock fetch / mock transport）
+- [x] tg-channel / tg-questionnaire 单测全绿（17/17，mock fetch / mock transport）
 - [ ] 可选：真实 Telegram bot 凭证冒烟
 
 ## Checkpoint: After Task 6-7（Complete）

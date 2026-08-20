@@ -11,6 +11,7 @@ function tgCfg(over: Partial<TgRemoteConfig> = {}): TgRemoteConfig {
 		username: undefined,
 		useCards: true,
 		timeoutMs: 1_800_000,
+		proxy: undefined,
 		...over,
 	};
 }

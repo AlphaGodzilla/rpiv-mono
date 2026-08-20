@@ -48,7 +48,7 @@ const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
 			{ type: "chat_id", value: "oc_1" },
 		],
 	},
-	tg: { botToken: "", chatId: "", userId: 0, username: undefined, useCards: true, timeoutMs: 600_000 },
+	tg: { botToken: "", chatId: "", userId: 0, username: undefined, useCards: true, timeoutMs: 600_000, proxy: undefined },
 };
 
 interface CapturedCommand {
