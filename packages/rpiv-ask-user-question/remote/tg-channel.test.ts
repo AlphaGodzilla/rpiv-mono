@@ -152,7 +152,13 @@ describe("waitForReply", () => {
 		expect(methods).toContain("editMessageReplyMarkup");
 		const lock = calls.find((c) => c.method === "editMessageReplyMarkup");
 		expect(lock?.body.reply_markup).toEqual({
-			inline_keyboard: [[{ text: "✓ B", callback_data: JSON.stringify({ q: "0", d: "1" }) }]],
+			inline_keyboard: [
+				[
+					{ text: "🔒 A", callback_data: JSON.stringify({ q: "0", d: "1" }) },
+					{ text: "✓ B", callback_data: JSON.stringify({ q: "0", d: "1" }) },
+				],
+				[{ text: "🔒 取消", callback_data: JSON.stringify({ q: "0", d: "1" }) }],
+			],
 		});
 	});
 

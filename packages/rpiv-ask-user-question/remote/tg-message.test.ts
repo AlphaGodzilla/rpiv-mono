@@ -78,7 +78,7 @@ describe("buildTgKeyboard", () => {
 });
 
 describe("buildTgLockedKeyboard", () => {
-	it("marks the chosen option with a checkmark and keeps only it", () => {
+	it("keeps all options; marks the chosen one ✓ and the rest 🔒", () => {
 		const q = makeQuestion({
 			options: [
 				{ label: "A", description: "a" },
@@ -86,16 +86,18 @@ describe("buildTgLockedKeyboard", () => {
 			],
 		});
 		const { rows } = parseKeyboard(buildTgLockedKeyboard(q, 0, 1, false)); // selected option index 1 ("B")
-		expect(rows).toHaveLength(1);
-		expect(rows[0][0].text).toBe("✓ B");
+		expect(rows).toHaveLength(2);
+		expect(rows[0].map((b) => b.text)).toEqual(["🔒 A", "✓ B"]);
+		expect(rows[1].map((b) => b.text)).toEqual(["🔒 取消"]);
 		expect(rows[0][0].value).toEqual({ q: "0", d: "1" });
+		expect(rows[1][0].value).toEqual({ q: "0", d: "1" });
 	});
 
-	it("cancelled keyboard shows 已取消 and is inert", () => {
+	it("cancelled keyboard keeps options 🔒 and shows 已取消", () => {
 		const q = makeQuestion();
 		const { rows } = parseKeyboard(buildTgLockedKeyboard(q, 0, undefined, true));
-		expect(rows).toHaveLength(1);
-		expect(rows[0][0].text).toBe("已取消");
-		expect(rows[0][0].value).toEqual({ q: "0", d: "1" });
+		expect(rows).toHaveLength(2);
+		expect(rows[0].map((b) => b.text)).toEqual(["🔒 A", "🔒 B"]);
+		expect(rows[1].map((b) => b.text)).toEqual(["🔒 已取消"]);
 	});
 });

@@ -67,9 +67,11 @@ export function buildTgKeyboard(q: QuestionData, questionIndex: number): object 
 }
 
 /**
- * Locked keyboard for an answered card: a single ✓/已取消 button with a `d`
- * marker. Telegram has no disabled buttons — after the reply resolves the
- * transport unsubscribes, so this button is purely visual and inert.
+ * Locked keyboard for an answered card: the FULL option set is kept, the chosen
+ * option marked ✓ and every other button (options + cancel) marked 🔒. Telegram
+ * has no native disabled buttons — each button carries an inert `d` marker and
+ * the transport unsubscribes after the answer, so nothing is clickable anymore;
+ * the ✓/🔒 marks are the visual disabled state.
  */
 export function buildTgLockedKeyboard(
 	q: QuestionData,
@@ -77,11 +79,19 @@ export function buildTgLockedKeyboard(
 	selectedIndex: number | undefined,
 	cancelled: boolean,
 ): object {
-	const label = cancelled
-		? "已取消"
-		: selectedIndex !== undefined
-			? `✓ ${q.options[selectedIndex]?.label ?? ""}`
-			: "已选择";
-	const row = [button(label, { q: String(questionIndex), d: "1" })];
-	return { inline_keyboard: [row] };
+	const inert = (label: string): TgButton => button(label, { q: String(questionIndex), d: "1" });
+	const rows: TgButton[][] = [];
+	if (!q.multiSelect) {
+		for (let start = 0; start < q.options.length; start += TG_OPTIONS_PER_ROW) {
+			rows.push(
+				q.options.slice(start, start + TG_OPTIONS_PER_ROW).map((o, i) => {
+					const idx = start + i;
+					const isSelected = !cancelled && selectedIndex !== undefined && selectedIndex === idx;
+					return inert(isSelected ? `✓ ${o.label}` : `🔒 ${o.label}`);
+				}),
+			);
+		}
+	}
+	rows.push([inert(cancelled ? "🔒 已取消" : "🔒 取消")]);
+	return { inline_keyboard: rows };
 }
