@@ -277,6 +277,7 @@ class TgTransportImpl implements TgTransport {
 		if (!value) return;
 		if (!pending.card || String(pending.card.index) !== String(value.q)) return; // stale card
 		const isCancel = value.c === "1";
+		this.log(`callback received from ${from.id} q=${value.q} ${isCancel ? "(cancel)" : ""}`);
 		const optionNum = typeof value.o === "string" ? Number.parseInt(value.o, 10) : NaN;
 		const selectedIndex = isCancel || !Number.isFinite(optionNum) ? undefined : optionNum - 1;
 		const locked = buildTgLockedKeyboard(pending.card.question, pending.card.index, selectedIndex, isCancel);
@@ -284,11 +285,15 @@ class TgTransportImpl implements TgTransport {
 			chat_id: chat.id,
 			message_id: msg.message_id,
 			reply_markup: locked,
-		}).catch(() => undefined);
+		}).catch((err) => {
+			this.log(`lock card failed: ${err instanceof Error ? err.message : String(err)}`);
+		});
 		void this.callApi("answerCallbackQuery", {
 			callback_query_id: callback.id,
 			text: isCancel ? "已取消" : "已选择",
-		}).catch(() => undefined);
+		}).catch((err) => {
+			this.log(`answer callback failed: ${err instanceof Error ? err.message : String(err)}`);
+		});
 		this.settle({
 			text: isCancel ? pending.card.cancelWord : String(optionNum),
 			chatId: Number(chat.id),

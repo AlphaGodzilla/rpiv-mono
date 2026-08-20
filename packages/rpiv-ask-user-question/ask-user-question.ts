@@ -303,7 +303,9 @@ async function runTgQuestionnaireWithConnect(
 	cfg: RemoteConfig,
 ): Promise<RemoteOutcome> {
 	try {
-		const transport = createTgTransport(cfg.tg);
+		const transport = createTgTransport(cfg.tg, {
+			log: (msg) => ctx.ui.notify?.(`[tg] ${msg}`, "info"),
+		});
 		try {
 			return await runTgQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
 		} finally {
