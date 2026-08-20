@@ -180,15 +180,7 @@ describe("waitForReply", () => {
 		expect(methods).toContain("answerCallbackQuery");
 		expect(methods).toContain("editMessageReplyMarkup");
 		const lock = calls.find((c) => c.method === "editMessageReplyMarkup");
-		expect(lock?.body.reply_markup).toEqual({
-			inline_keyboard: [
-				[
-					{ text: "🔒 A", callback_data: JSON.stringify({ q: "0", d: "1" }) },
-					{ text: "✓ B", callback_data: JSON.stringify({ q: "0", d: "1" }) },
-				],
-				[{ text: "🔒 取消", callback_data: JSON.stringify({ q: "0", d: "1" }) }],
-			],
-		});
+		expect(lock?.body.reply_markup).toEqual({ inline_keyboard: [] }); // buttons removed after the answer
 	});
 
 	it("ignores clicks on a stale card (q mismatch)", async () => {

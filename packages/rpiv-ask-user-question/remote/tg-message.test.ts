@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeQuestion } from "../test-fixtures.js";
 import type { TgRemoteConfig } from "./remote-config.js";
-import { buildTgKeyboard, buildTgLockedKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
+import { buildTgDoneKeyboard, buildTgKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
 
 function tgCfg(over: Partial<TgRemoteConfig> = {}): TgRemoteConfig {
 	return {
@@ -77,27 +77,8 @@ describe("buildTgKeyboard", () => {
 	});
 });
 
-describe("buildTgLockedKeyboard", () => {
-	it("keeps all options; marks the chosen one ✓ and the rest 🔒", () => {
-		const q = makeQuestion({
-			options: [
-				{ label: "A", description: "a" },
-				{ label: "B", description: "b" },
-			],
-		});
-		const { rows } = parseKeyboard(buildTgLockedKeyboard(q, 0, 1, false)); // selected option index 1 ("B")
-		expect(rows).toHaveLength(2);
-		expect(rows[0].map((b) => b.text)).toEqual(["🔒 A", "✓ B"]);
-		expect(rows[1].map((b) => b.text)).toEqual(["🔒 取消"]);
-		expect(rows[0][0].value).toEqual({ q: "0", d: "1" });
-		expect(rows[1][0].value).toEqual({ q: "0", d: "1" });
-	});
-
-	it("cancelled keyboard keeps options 🔒 and shows 已取消", () => {
-		const q = makeQuestion();
-		const { rows } = parseKeyboard(buildTgLockedKeyboard(q, 0, undefined, true));
-		expect(rows).toHaveLength(2);
-		expect(rows[0].map((b) => b.text)).toEqual(["🔒 A", "🔒 B"]);
-		expect(rows[1].map((b) => b.text)).toEqual(["🔒 已取消"]);
+describe("buildTgDoneKeyboard", () => {
+	it("removes every button after an answer", () => {
+		expect(buildTgDoneKeyboard()).toEqual({ inline_keyboard: [] });
 	});
 });
