@@ -74,3 +74,20 @@ export function buildTgKeyboard(q: QuestionData, questionIndex: number): object 
 export function buildTgDoneKeyboard(): object {
 	return { inline_keyboard: [] };
 }
+
+/** Escape text for Telegram HTML parse mode (labels may contain & < >). */
+function escapeHtml(text: string): string {
+	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Footer appended to the card text once the user answers: the chosen option
+ * label (or 已取消), so the card keeps a persistent record of the selection
+ * after the buttons are removed. Leading blank lines separate it from the body.
+ */
+export function buildTgAnswerNote(q: QuestionData, optionNum: number | undefined, isCancel: boolean): string {
+	if (isCancel) return "\n\n已取消";
+	const label =
+		optionNum !== undefined && Number.isInteger(optionNum) ? q.options[optionNum - 1]?.label : undefined;
+	return label === undefined ? "\n\n已选择" : `\n\n已选择：${escapeHtml(label)}`;
+}

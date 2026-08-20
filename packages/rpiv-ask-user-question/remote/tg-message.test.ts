@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeQuestion } from "../test-fixtures.js";
 import type { TgRemoteConfig } from "./remote-config.js";
-import { buildTgDoneKeyboard, buildTgKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
+import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
 
 function tgCfg(over: Partial<TgRemoteConfig> = {}): TgRemoteConfig {
 	return {
@@ -80,5 +80,27 @@ describe("buildTgKeyboard", () => {
 describe("buildTgDoneKeyboard", () => {
 	it("removes every button after an answer", () => {
 		expect(buildTgDoneKeyboard()).toEqual({ inline_keyboard: [] });
+	});
+});
+
+describe("buildTgAnswerNote", () => {
+	it("notes the chosen option label", () => {
+		const q = makeQuestion({ options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] });
+		expect(buildTgAnswerNote(q, 2, false)).toBe("\n\n已选择：B");
+	});
+
+	it("notes a cancel", () => {
+		const q = makeQuestion();
+		expect(buildTgAnswerNote(q, undefined, true)).toBe("\n\n已取消");
+	});
+
+	it("escapes HTML characters in the option label", () => {
+		const q = makeQuestion({ options: [{ label: "A & B <C>", description: "d" }] });
+		expect(buildTgAnswerNote(q, 1, false)).toBe("\n\n已选择：A &amp; B &lt;C&gt;");
+	});
+
+	it("falls back to a bare note when the option index is invalid", () => {
+		const q = makeQuestion({ options: [{ label: "A", description: "a" }] });
+		expect(buildTgAnswerNote(q, 99, false)).toBe("\n\n已选择");
 	});
 });

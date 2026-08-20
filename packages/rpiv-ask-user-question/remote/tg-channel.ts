@@ -1,7 +1,7 @@
 import type { QuestionData } from "../tool/types.js";
 import type { TgRemoteConfig } from "./remote-config.js";
 import { createProxyAwareFetch, type TgFetch } from "./tg-http.js";
-import { buildTgDoneKeyboard, type TgButtonValue } from "./tg-message.js";
+import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
 
 /**
  * Telegram transport for the `ask-prd` flow, built on a zero-dependency
@@ -280,12 +280,17 @@ class TgTransportImpl implements TgTransport {
 		this.log(`callback received from ${from.id} q=${value.q} ${isCancel ? "(cancel)" : ""}`);
 		const optionNum = typeof value.o === "string" ? Number.parseInt(value.o, 10) : NaN;
 		const doneKeyboard = buildTgDoneKeyboard();
-		void this.callApi("editMessageReplyMarkup", {
+		const finalText =
+			buildTgQuestionMessage(pending.card.question, this.cfg) +
+			buildTgAnswerNote(pending.card.question, Number.isFinite(optionNum) ? optionNum : undefined, isCancel);
+		void this.callApi("editMessageText", {
 			chat_id: chat.id,
 			message_id: msg.message_id,
+			text: finalText,
+			parse_mode: "HTML",
 			reply_markup: doneKeyboard,
 		}).catch((err) => {
-			this.log(`clear card buttons failed: ${err instanceof Error ? err.message : String(err)}`);
+			this.log(`card finalize failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
 		void this.callApi("answerCallbackQuery", {
 			callback_query_id: callback.id,

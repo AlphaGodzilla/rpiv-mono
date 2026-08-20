@@ -178,9 +178,13 @@ describe("waitForReply", () => {
 		expect(reply).toEqual({ text: "2", chatId: -100123, messageId: 222 });
 		const methods = calls.map((c) => c.method);
 		expect(methods).toContain("answerCallbackQuery");
-		expect(methods).toContain("editMessageReplyMarkup");
-		const lock = calls.find((c) => c.method === "editMessageReplyMarkup");
-		expect(lock?.body.reply_markup).toEqual({ inline_keyboard: [] }); // buttons removed after the answer
+		expect(methods).toContain("editMessageText");
+		const finalize = calls.find((c) => c.method === "editMessageText");
+		expect(finalize?.body.reply_markup).toEqual({ inline_keyboard: [] }); // buttons removed after the answer
+		expect(finalize?.body.parse_mode).toBe("HTML");
+		expect(finalize?.body.text).toContain("1. A — a"); // original body preserved
+		expect(String(finalize?.body.text).endsWith("已选择：B")).toBe(true); // chosen option noted
+		expect(methods).not.toContain("editMessageReplyMarkup");
 	});
 
 	it("ignores clicks on a stale card (q mismatch)", async () => {
