@@ -196,7 +196,7 @@ fallback to Feishu). Only the configured @-user's replies/button clicks count as
 | `tg.chatId` | Target chat id (group/supergroup ids are negative, kept as a string). The bot and the @-user must be members. | — |
 | `tg.userId` | The @-mentioned user's numeric id; **only** this user's replies/button clicks are accepted. | — |
 | `tg.username` | Optional public username (e.g. `"@alice"`) used for the visible @ mention. | absent → `@user(<id>)` |
-| `tg.useCards` | Send questions as inline-keyboard cards (one button per option + Cancel); clicking answers immediately, **removes the buttons** and appends a footer line with the selection (e.g. `已选择：选项A`, `已取消`) to the card text (a ✓ toast also confirms). Multi-select still takes a text reply (`1,2`). Card sends fall back to plain text. | `true` |
+| `tg.useCards` | Send questions as inline-keyboard cards (one button per option + Cancel); clicking answers immediately, **removes the buttons** and appends a footer line with the selection (e.g. `✅ 已选择：选项A`, `已取消`) to the card text (a ✓ toast also confirms). Multi-select still takes a text reply (`1,2`). Card sends fall back to plain text. | `true` |
 | `tg.timeoutMs` | How long to wait for the @-user's reply per question. **Independent of the Feishu `timeoutMs`** — Telegram messages are not expected to be answered quickly. On timeout the unanswered questions are re-asked in the main conversation. | `1800000` (30 min) |
 | `tg.proxy` | Optional HTTP(S) proxy (e.g. `"http://127.0.0.1:6152"`). Falls back to `HTTPS_PROXY`/`HTTP_PROXY` env, then the macOS system proxy (`scutil`), then a direct connection. Needed where Telegram requires a proxy (Node's global fetch cannot use the system proxy). | auto |
 

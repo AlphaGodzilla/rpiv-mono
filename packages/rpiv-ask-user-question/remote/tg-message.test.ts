@@ -86,7 +86,7 @@ describe("buildTgDoneKeyboard", () => {
 describe("buildTgAnswerNote", () => {
 	it("notes the chosen option label", () => {
 		const q = makeQuestion({ options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] });
-		expect(buildTgAnswerNote(q, 2, false)).toBe("\n\n已选择：B");
+		expect(buildTgAnswerNote(q, 2, false)).toBe("\n\n✅ 已选择：B");
 	});
 
 	it("notes a cancel", () => {
@@ -96,11 +96,11 @@ describe("buildTgAnswerNote", () => {
 
 	it("escapes HTML characters in the option label", () => {
 		const q = makeQuestion({ options: [{ label: "A & B <C>", description: "d" }] });
-		expect(buildTgAnswerNote(q, 1, false)).toBe("\n\n已选择：A &amp; B &lt;C&gt;");
+		expect(buildTgAnswerNote(q, 1, false)).toBe("\n\n✅ 已选择：A &amp; B &lt;C&gt;");
 	});
 
 	it("falls back to a bare note when the option index is invalid", () => {
 		const q = makeQuestion({ options: [{ label: "A", description: "a" }] });
-		expect(buildTgAnswerNote(q, 99, false)).toBe("\n\n已选择");
+		expect(buildTgAnswerNote(q, 99, false)).toBe("\n\n✅ 已选择");
 	});
 });

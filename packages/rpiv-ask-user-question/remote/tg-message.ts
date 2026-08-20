@@ -89,5 +89,5 @@ export function buildTgAnswerNote(q: QuestionData, optionNum: number | undefined
 	if (isCancel) return "\n\n已取消";
 	const label =
 		optionNum !== undefined && Number.isInteger(optionNum) ? q.options[optionNum - 1]?.label : undefined;
-	return label === undefined ? "\n\n已选择" : `\n\n已选择：${escapeHtml(label)}`;
+	return label === undefined ? "\n\n✅ 已选择" : `\n\n✅ 已选择：${escapeHtml(label)}`;
 }

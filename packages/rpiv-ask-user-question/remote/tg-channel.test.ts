@@ -183,7 +183,7 @@ describe("waitForReply", () => {
 		expect(finalize?.body.reply_markup).toEqual({ inline_keyboard: [] }); // buttons removed after the answer
 		expect(finalize?.body.parse_mode).toBe("HTML");
 		expect(finalize?.body.text).toContain("1. A — a"); // original body preserved
-		expect(String(finalize?.body.text).endsWith("已选择：B")).toBe(true); // chosen option noted
+		expect(String(finalize?.body.text).endsWith("✅ 已选择：B")).toBe(true); // chosen option noted with a green check
 		expect(methods).not.toContain("editMessageReplyMarkup");
 	});
 
