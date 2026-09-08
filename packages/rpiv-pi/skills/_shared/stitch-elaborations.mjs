@@ -24,12 +24,15 @@
 // are detected fence-aware (a `## ` inside a Find/Replace code block is NOT a
 // boundary) and each phase owns everything up to the next `## Phase N:` heading,
 // so the swap is idempotent — re-stitching can't accumulate duplicate per-phase
-// trailers (Success Criteria / Notes / Deferred). The heading count is unchanged
-// (1:1 swap), so the downstream `phase_count == '## Phase N:' headings`
+// trailers (Success Criteria / Notes / Deferred). An elaboration is refused
+// when a fence it opens never closes (the leak would swallow the next phase's
+// heading) or when it carries other than one out-of-fence `## Phase N:`
+// heading, and the stitched body is refused before writing if its heading
+// count drifted, so the downstream `phase_count == '## Phase N:' headings`
 // derive-check stays valid.
 //
 // Always exits 0 on a normal run (a plan phase with no elaboration is left as-is
-// and reported — partial runs are allowed). Exits 1 only on a wiring/path error:
+// and reported — partial runs are allowed). Exits 1 on a refused elaboration or a wiring/path error:
 // missing argument, missing plan, or zero elaboration docs found.
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -105,6 +108,17 @@ const fenceStep = (state, line) => {
 const splitFrontmatter = (content) => {
 	const m = content.match(FRONTMATTER_RE);
 	return m ? [m[0], content.slice(m[0].length)] : ["", content];
+};
+
+/** 1-based line of a fence opener that never closes, or undefined when balanced. */
+const openFenceLine = (text) => {
+	const fenceState = { inFence: false, fenceLen: 0 };
+	let opened;
+	text.split("\n").forEach((line, i) => {
+		const was = fenceState.inFence;
+		if (fenceStep(fenceState, line) && !was) opened = i + 1;
+	});
+	return fenceState.inFence ? opened : undefined;
 };
 
 /** Extract the `## Phase N:` section (heading to EOF) from an elaboration body. */
@@ -293,9 +307,26 @@ if (existsSync(elaborationsDir)) {
 	for (const name of readdirSync(elaborationsDir)) {
 		const m = name.match(NAME_RE);
 		if (!m) continue;
-		const [, body] = splitFrontmatter(readFileSync(resolve(elaborationsDir, name), "utf-8"));
+		const raw = readFileSync(resolve(elaborationsDir, name), "utf-8");
+		const [, body] = splitFrontmatter(raw);
 		const section = phaseSection(body);
-		if (section) elaborations.set(Number.parseInt(m[1], 10), section);
+		if (!section) continue;
+		const open = openFenceLine(raw);
+		if (open !== undefined) {
+			console.error(
+				`stitch-elaborations: ${name} refused — the fence opened at line ${open} never closes ` +
+					"(a bare ``` inside a ``` block closes it; open and close the outer block with four backticks)",
+			);
+			process.exit(1);
+		}
+		const headings = headingOffsets(section, PHASE_HEADING_RE).length;
+		if (headings !== 1) {
+			console.error(
+				`stitch-elaborations: ${name} refused — ${headings} '## Phase N:' headings outside fences, expected exactly 1`,
+			);
+			process.exit(1);
+		}
+		elaborations.set(Number.parseInt(m[1], 10), section);
 	}
 }
 
@@ -375,6 +406,13 @@ const wpv = wholePlanVerification({ preamble, starts, body, rebuilt });
 const newBody = [preamble.trim(), ...rebuilt, ...(wpv.text ? [wpv.text] : [])]
 	.filter((s) => s.length > 0)
 	.join("\n\n");
+const after = headingOffsets(newBody, PHASE_HEADING_RE).length;
+if (after !== starts.length) {
+	console.error(
+		`stitch-elaborations: refusing to write ${basename(planPath)} — '## Phase N:' headings would drift from ${starts.length} to ${after}`,
+	);
+	process.exit(1);
+}
 writeFileSync(planPath, `${frontmatter.trimEnd()}\n\n${newBody}\n`);
 
 let summary = `stitch-elaborations: stitched ${stitched}/${total} phases into ${basename(planPath)}`;

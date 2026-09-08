@@ -290,7 +290,6 @@ describe("equivalence — built-in workflows", () => {
 		"build::slice": "slices",
 		"build::slice-design": "designs",
 		"build::plan": "plans",
-		"build::code": "elaborations",
 		"build::validate": "validation",
 		// vet
 		"vet::code-review": "reviews",
@@ -324,6 +323,9 @@ describe("equivalence — built-in workflows", () => {
 		// republishes them on the `designs` channel (latest-wins) for synthesize.
 		"build::design-review": "designs",
 		"build::subplan": "subplans",
+		// code keeps the derived bucket but swaps in the structural elaboration
+		// parser, so the contract can refuse a section the stitch would mis-splice.
+		"build::code": "elaborations",
 		"build::plan-grade": "plan-verdicts",
 		// The confirm arms re-judge on the SAME verdict channel as their gate.
 		"build::plan-confirm": "plan-verdicts",

@@ -9032,8 +9032,9 @@ describe("grade panel unit-failed routing (dimension-bearing sentinels)", () => 
 		"plan-verdicts": verdicts,
 	});
 
-	it("wiring: exactly the six grade-panel loops opt into retryHaltedUnits: 1; every other fanout stays without it", () => {
+	it("wiring: the six grade-panel loops and build's elaborate fanout opt into retryHaltedUnits: 1; every other fanout stays without it", () => {
 		const expected = [
+			"build:code",
 			"build:code-confirm",
 			"build:code-grade",
 			"build:plan-confirm",
@@ -9050,7 +9051,7 @@ describe("grade panel unit-failed routing (dimension-bearing sentinels)", () => 
 			}
 		}
 		expect(optedIn.sort()).toEqual(expected);
-		for (const stage of ["slice-grade", "plan-grade", "plan-confirm", "code-grade", "code-confirm"]) {
+		for (const stage of ["slice-grade", "plan-grade", "plan-confirm", "code", "code-grade", "code-confirm"]) {
 			const loop = build().stages[stage]?.loop;
 			expect(loop?.kind).toBe("fanout");
 			if (loop?.kind !== "fanout") throw new Error(`build ${stage} stage has no fanout loop`);

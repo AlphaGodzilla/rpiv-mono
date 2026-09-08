@@ -11,6 +11,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Prior snapshots are written once per fix round.** `plan-snapshot` / `code-snapshot` publish `<plan-basename>.r<N>.md` under `.rpiv/artifacts/priors/` (round N = the snapshot's ordinal on its own channel) and keep writing the basename-keyed copy beside it. The surgical-fix guard reads the round's own bytes through the channel handle, so a resume replaying an earlier round no longer sees a later round's snapshot.
 
+### Fixed
+
+- **A leaked code fence in one elaboration no longer halts the build at `implement`.** An elaboration that embedded a markdown file with its own ``` blocks under a three-backtick fence left a fence open; the splice carried it into the plan, the next `## Phase N:` heading fell inside it, and the run halted an hour later at the implement fanout's derive-check. The `code` stage now parses `fence_walk` / `phase_headings` off the body and the elaborate contract refuses them in-session (then one `retryHaltedUnits` re-dispatch), `stitch-elaborations` refuses an elaboration whose fence never closes or that carries other than one phase heading and never writes a plan whose heading count drifted, and `code-splice` halts with the stitch's own diagnostic. The skill's output template and hard rules now spell the four-backtick outer fence.
+
 ### Breaking / Upgrade Notes
 - Run state trails move to schema v3 — runs recorded by an earlier version refuse to resume, so finish or restart in-flight runs before upgrading.
 

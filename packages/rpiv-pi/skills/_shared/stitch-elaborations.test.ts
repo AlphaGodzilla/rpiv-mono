@@ -832,3 +832,78 @@ describe("whole-plan verification emission", () => {
 		expect((stitched.match(/^## Whole-Plan Verification/gm) ?? []).length).toBe(1);
 	});
 });
+
+// An elaboration that embeds a whole markdown file under a THREE-backtick fence
+// while that file carries its own ``` blocks: the inner closer ends the outer
+// fence early and the intended outer closer reopens one that never closes.
+const elaborationWithLeakedFence = (n: number, title: string) =>
+	[
+		"---",
+		`phase_n: ${n}`,
+		"status: ready",
+		"---",
+		"",
+		`## Phase ${n}: ${title}`,
+		"### Changes",
+		"#### `guide.md`",
+		"Add — the package guidance",
+		"```markdown",
+		"# guide",
+		"```ts",
+		"export const x = 1;",
+		"```",
+		"more prose",
+		"```",
+		"### Success Criteria",
+		"#### Automated Verification:",
+		"- [ ] npm test",
+		"",
+	].join("\n");
+
+describe("stitch-elaborations.mjs refusals", () => {
+	it("refuses an elaboration whose fence never closes, naming the file and opener line, and leaves the plan untouched", () => {
+		writeFileSync(join(elaborationsDir, "2026-06-24_demo__phase-1.md"), elaborationWithLeakedFence(1, "First"));
+		writeFileSync(
+			join(elaborationsDir, "2026-06-24_demo__phase-2.md"),
+			elaboration(2, "Second", "export const bar = 2;"),
+		);
+
+		const { status, stderr } = runFail(planPath);
+
+		expect(status).toBe(1);
+		expect(stderr).toContain("2026-06-24_demo__phase-1.md refused");
+		expect(stderr).toContain("fence opened at line 16 never closes");
+		expect(stderr).toContain("four backticks");
+		expect(readFileSync(planPath, "utf-8")).toBe(PLAN);
+	});
+
+	it("refuses an elaboration carrying a second out-of-fence '## Phase N:' heading", () => {
+		const doubled = `${elaboration(1, "First", "export const foo = 1;")}\n## Phase 2: Second\n- stray\n`;
+		writeFileSync(join(elaborationsDir, "2026-06-24_demo__phase-1.md"), doubled);
+
+		const { status, stderr } = runFail(planPath);
+
+		expect(status).toBe(1);
+		expect(stderr).toContain("2026-06-24_demo__phase-1.md refused");
+		expect(stderr).toContain("2 '## Phase N:' headings outside fences, expected exactly 1");
+		expect(readFileSync(planPath, "utf-8")).toBe(PLAN);
+	});
+
+	it("accepts the same embed under a four-backtick outer fence", () => {
+		const fixed = elaborationWithLeakedFence(1, "First")
+			.replace("```markdown", "````markdown")
+			.replace("more prose\n```", "more prose\n````");
+		writeFileSync(join(elaborationsDir, "2026-06-24_demo__phase-1.md"), fixed);
+		writeFileSync(
+			join(elaborationsDir, "2026-06-24_demo__phase-2.md"),
+			elaboration(2, "Second", "export const bar = 2;"),
+		);
+
+		const out = run(planPath);
+		const stitched = readFileSync(planPath, "utf-8");
+
+		expect(out).toContain("stitched 2/2 phases");
+		expect([...stitched.matchAll(/^## Phase (\d+):/gm)].length).toBe(2);
+		expect(stitched).toContain("````markdown");
+	});
+});

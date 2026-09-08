@@ -15,6 +15,11 @@ contract:
       properties:
         status:
           enum: [in-progress, in-review, ready]
+        # Derived from the body by the build workflow's elaboration parser, never authored.
+        fence_walk:
+          enum: [balanced]
+        phase_headings:
+          enum: [1]
   consumes:
     meta:
       artifactKind: [plan]
@@ -71,7 +76,7 @@ Path: `.rpiv/artifacts/elaborations/<plan-basename>__phase-<N>.md`, where `<plan
 
 The body **must** contain exactly one `## Phase <N>: <title>` section — verbatim heading text matching the plan (same `N`, same title). The `stitch-elaborations` script swaps the plan's `## Phase N:` section for this one, so the heading is the splice anchor: do not rename it or change `N`.
 
-```markdown
+````markdown
 ---
 date: <iso>
 author: <author>
@@ -110,7 +115,7 @@ tags: [elaboration]
 
 ## Notes / Deferred
 <only if a blocker forced an assumption — otherwise omit this section>
-```
+````
 
 ## Hard rules
 
@@ -119,6 +124,7 @@ tags: [elaboration]
 - **Implement-ready code, grounded in the current tree.** Read the cited files first; emit code blocks, not prose hand-waving ("handle appropriately", "etc.").
 - **Repo-root-relative citations, from what you read.** Every `file:line` your elaboration emits — in prose or in code comments — uses the **repo-root-relative** path (`packages/billing/src/invoice.ts:NN`), never a subdirectory-relative form (`src/invoice.ts:NN`) or a bare basename, and comes from a file you actually read; if you're unsure of the line, cite the path alone and omit the `:line`.
 - **Body is exactly one `## Phase N: <title>` section** with the verbatim heading — the deterministic splice folds it back by phase number. Don't rename the heading or change `N`.
+- **A fence that wraps other fences is longer than them.** A block whose content itself contains ``` lines — an embedded markdown or guidance file, a doc edit with examples — opens and closes with four backticks (````). A bare ``` inside a ``` block closes it, the leaked fence swallows the next phase's heading at the splice, and the stitch refuses the elaboration.
 - **Write the doc, not the code.** You only write your elaboration artifact; reading the codebase to ground the code is required, editing it is out of scope — `implement` applies the code later, after the splice. The Self-check step's tree mutation is the ONE exception: a transient, reverted probe that applies drafted blocks to verify them, then reverts byte-identical — it never leaves the edit for `implement` (the elaboration doc carries the code; the tree returns clean).
 - **Byte-identical self-check revert (the sole parallel-safety contract).** The Self-check `git restore <tracked> + rm -f <new>` MUST return the tree to a `git status --porcelain` byte-identical pre-probe snapshot; any residue is a blocking error and the unit emits nothing. Under the parallel phase fanout a sibling unit's in-flight edit can surface as cross-file check noise — attribute ONLY errors in YOUR write-set and revert past the rest.
 - **Per-phase write-scope.** Each unit applies and reverts ONLY the files its phase's `### Changes` names — the same write-scope discipline `implement`'s single-phase mode follows. Never probe, edit, or revert a file another phase owns. A declared production file's co-located test twin (e.g. `x.ts` → `x.test.ts`) is inside the phase's write-scope automatically — the scope floor and the implement DAG both twin-expand `files:` — so a mechanical twin follow-up (mock arity, call-site signature) needs no scope-addition note; only a NON-twin file outside the phase's `files:` is a scope change worth flagging.

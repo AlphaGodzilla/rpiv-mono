@@ -4,6 +4,7 @@
  * re-export targets a `.js` specifier (Node16 ESM, source stays `.ts`).
  */
 
+export { elaborationOutcome, elaborationParser, elaborationStructure } from "./elaboration.js";
 export {
 	allDimensionsPass,
 	anchorNitsOnly,
@@ -57,9 +58,11 @@ export {
 	FENCE_LINE_RE,
 	fencedSpans,
 	forEachLineOutsideFences,
+	openFenceLine,
 } from "./markdown-fence.js";
 export { planCitationCheck } from "./plan-cite.js";
 export {
+	ELABORATE_PHASE_FANOUT,
 	FRONTMATTER_PHASE_FANOUT,
 	IMPLEMENT_DAG_FANOUT,
 	IMPLEMENT_PLANS_FANOUT,

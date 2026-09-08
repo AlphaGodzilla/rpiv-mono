@@ -139,6 +139,13 @@ const FRONTMATTER_PHASE_FANOUT = fanout({
 });
 
 /**
+ * The elaborate fanout: `FRONTMATTER_PHASE_FANOUT` with one re-dispatch for a
+ * unit whose output failed its contract after the in-session retries — a
+ * malformed section is re-produced with the failure memo, not stitched.
+ */
+const ELABORATE_PHASE_FANOUT = { ...FRONTMATTER_PHASE_FANOUT, retryHaltedUnits: 1 };
+
+/**
  * Derive the directed `deps` edges for ONE implement phase under the dep-gated
  * DAG fanout (`IMPLEMENT_DAG_FANOUT`). Edges point strictly downward (toward
  * LOWER phase numbers), so the graph is acyclic by construction. Two clauses:
@@ -412,6 +419,7 @@ const PLANS_PHASE_FANOUT = fanout({
 const IMPLEMENT_PLANS_FANOUT = { ...PLANS_PHASE_FANOUT, concurrency: 1 };
 
 export {
+	ELABORATE_PHASE_FANOUT,
 	FRONTMATTER_PHASE_FANOUT,
 	IMPLEMENT_DAG_FANOUT,
 	IMPLEMENT_PLANS_FANOUT,

@@ -40,10 +40,14 @@ slice-checks.ts     — sliceStructureCheck (brief conservation, citeDischarged 
 shared.ts           — VERDICT_DIR, writeStructureVerdict (one shape for all deterministic checks; blocking⇒high,
                       all-advisory⇒low; idempotent basename-keyed overwrite), haltPreflight (StagePreflightError
                       re-export), MAX_PHASES, containedPath escape guard, TEST_PATH_RE
-markdown-fence.ts   — FENCE_LINE_RE, fencedSpans, forEachLineOutsideFences — mirrors the fence-aware scan in
-                      skills/_shared/stitch-elaborations.mjs (shared predicate shape, deliberately NOT a shared import)
+markdown-fence.ts   — FENCE_LINE_RE, fencedSpans, forEachLineOutsideFences, openFenceLine — mirrors the fence-aware
+                      scan in skills/_shared/stitch-elaborations.mjs (shared predicate shape, deliberately NOT a shared import)
+elaboration.ts      — elaborationOutcome: the elaborations bucket collector + a parser adding body-derived
+                      fence_walk / phase_headings beside the frontmatter, which the elaborate contract's enums refuse
+                      (in-session validation retry, then one retryHaltedUnits re-dispatch) before the stitch runs
 plan-phases.ts      — phases: frontmatter parsing (planPhaseRecords, MAX_PHASES cap), phaseFiles, withTestTwins,
-                      FRONTMATTER_PHASE_FANOUT / IMPLEMENT_DAG_FANOUT / REVIEW_PHASE_ITERATE wiring tables
+                      FRONTMATTER_PHASE_FANOUT / ELABORATE_PHASE_FANOUT / IMPLEMENT_DAG_FANOUT / REVIEW_PHASE_ITERATE
+                      wiring tables
 plan-cite.ts, slices.ts, goal-baseline.ts, reconcile.ts (+ reconcile-directives.mjs/.d.mts loader-free ESM twin)
                     — plan citation-check gate skill-input; slice-map fanout + synth clusters; goal capture
                       prompts + scopeExcess; post-implement reconcile with test-path-only write allowlist

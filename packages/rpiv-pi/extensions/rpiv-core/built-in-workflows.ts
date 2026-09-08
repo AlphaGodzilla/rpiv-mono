@@ -47,7 +47,8 @@ import {
 	codeGatePasses,
 	codeSnapshot,
 	confirmDue,
-	FRONTMATTER_PHASE_FANOUT,
+	ELABORATE_PHASE_FANOUT,
+	elaborationOutcome,
 	freshVerdicts,
 	haltPreflight,
 	IMPLEMENT_DAG_FANOUT,
@@ -840,7 +841,12 @@ const buildWorkflow = defineWorkflow({
 		// Elaborate implement-ready code into each phase in parallel (fanout),
 		// deterministically splice it back into the plan (code-splice), then
 		// re-grade the now code-bearing plan — guarding the blind-splice risk.
-		code: produces({ skill: "elaborate", loop: FRONTMATTER_PHASE_FANOUT, reads: ["plans"] }),
+		code: produces({
+			skill: "elaborate",
+			loop: ELABORATE_PHASE_FANOUT,
+			reads: ["plans"],
+			outcome: elaborationOutcome,
+		}),
 		"code-splice": acts.script({
 			reads: ["plans"],
 			run: ({ state, cwd }) => {
@@ -853,7 +859,16 @@ const buildWorkflow = defineWorkflow({
 					);
 				}
 				const planPath = isAbsolute(plan.handle.path) ? plan.handle.path : join(cwd, plan.handle.path);
-				execFileSync("node", [STITCH_SCRIPT, planPath], { cwd });
+				try {
+					execFileSync("node", [STITCH_SCRIPT, planPath], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+				} catch (err) {
+					const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
+					throw haltPreflight(
+						"code-splice",
+						"code-splice: stitch refused the elaborations",
+						stderr || (err instanceof Error ? err.message : String(err)),
+					);
+				}
 			},
 		}),
 		// Deterministic citation floor over the SPLICED (code-bearing) plan before
