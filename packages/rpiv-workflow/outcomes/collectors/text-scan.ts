@@ -45,22 +45,32 @@ export interface TextScanCollectorOpts {
 	 * host-agnostic; a convention layer pins tool names via this predicate.
 	 */
 	match?: (tc: ToolCall) => boolean;
+	/**
+	 * Narrows the tool-argument fallback to these argument KEYS of a matching
+	 * call (e.g. `["path"]` so a `write` call's `content` — which may quote a
+	 * sibling artifact's path — can never outrank the path it actually wrote
+	 * to). Absent ⇒ every string-valued argument is scanned, as before. Must be
+	 * a non-empty array of strings when provided (construction-time guard).
+	 */
+	argKeys?: readonly string[];
 }
 
 /** Last match of `pattern` against the branch's tool-use INPUT values — the
  *  fallback surface. Forward scan, last hit wins, mirroring the text scan's
  *  reverse-last-match semantics over the agent's recorded actions instead of
- *  its narration. */
+ *  its narration. `argKeys` restricts which argument values are consulted. */
 function lastToolArgMatch(
 	branch: BranchEntry[],
 	pattern: RegExp,
 	offsetStart?: number,
 	match?: (tc: ToolCall) => boolean,
+	argKeys?: readonly string[],
 ): string | undefined {
 	let last: string | undefined;
 	for (const use of iterToolUses(branch, offsetStart)) {
 		if (match !== undefined && !match(use)) continue;
-		for (const value of Object.values(use.input)) {
+		for (const [key, value] of Object.entries(use.input)) {
+			if (argKeys !== undefined && !argKeys.includes(key)) continue;
 			if (typeof value !== "string") continue;
 			const matches = value.match(pattern);
 			if (matches !== null && matches.length > 0) last = matches[matches.length - 1];
@@ -76,12 +86,19 @@ export function textScanCollector(opts: TextScanCollectorOpts): ArtifactCollecto
 		"must be a function when provided",
 		opts.match === undefined || typeof opts.match === "function",
 	);
-	const { pattern, toHandle, noun, match } = opts;
+	requireOpt(
+		"textScanCollector",
+		"argKeys",
+		"must be a non-empty array of strings when provided",
+		opts.argKeys === undefined ||
+			(Array.isArray(opts.argKeys) && opts.argKeys.length > 0 && opts.argKeys.every((k) => typeof k === "string")),
+	);
+	const { pattern, toHandle, noun, match, argKeys } = opts;
 	return defineCollector({
 		collect: (ctx) => {
 			const hit =
 				lastMatchInBranch(ctx.branch, pattern, ctx.branchOffset) ??
-				lastToolArgMatch(ctx.branch, pattern, ctx.branchOffset, match);
+				lastToolArgMatch(ctx.branch, pattern, ctx.branchOffset, match, argKeys);
 			if (!hit) {
 				return {
 					kind: "fatal",

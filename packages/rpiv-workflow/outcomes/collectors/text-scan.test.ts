@@ -121,4 +121,125 @@ describe("textScanCollector", () => {
 			textScanCollector({ pattern: /outputs\/[\w.-]+\.md/g, toHandle: fs, noun: "path", match: "nope" as never }),
 		).toThrow(/textScanCollector: `match` must be a function when provided/);
 	});
+
+	// The host's own part spelling: `@earendil-works/pi-ai` emits
+	// `{ type: "toolCall", name, arguments }`, and every persisted Pi session carries
+	// it. The fixtures above use the `tool_use`/`input` wire spelling; both must
+	// collect identically, or the tool-argument fallback is dead against real
+	// branches while its tests stay green.
+	describe("the live toolCall/arguments shape", () => {
+		it("a toolCall-only hit collects exactly like a tool_use-only hit", async () => {
+			const branch = [
+				asstTool([
+					{
+						type: "toolCall",
+						id: "c1",
+						name: "write",
+						arguments: { path: "outputs/only-in-tool.md", content: "x" },
+					},
+				]),
+			];
+			const c = textScanCollector({ pattern: /outputs\/[\w.-]+\.md/g, toHandle: fs, noun: "path" });
+			expect(await c.collect(ctxOf(branch) as never)).toEqual({
+				kind: "ok",
+				artifacts: [{ handle: { kind: "fs", path: "outputs/only-in-tool.md" }, role: "primary" }],
+			});
+		});
+
+		it("match sees the normalised { name, input } under the toolCall spelling", async () => {
+			const branch = [
+				asstTool([
+					{ type: "toolCall", id: "c1", name: "read", arguments: { path: "outputs/read-only.md" } },
+					{ type: "toolCall", id: "c2", name: "write", arguments: { path: "outputs/written.md", content: "x" } },
+					{ type: "toolCall", id: "c3", name: "read", arguments: { path: "outputs/read-later.md" } },
+				]),
+			];
+			const c = textScanCollector({
+				pattern: /outputs\/[\w.-]+\.md/g,
+				toHandle: fs,
+				noun: "path",
+				match: (tc) => tc.name === "write",
+			});
+			expect(await c.collect(ctxOf(branch) as never)).toEqual({
+				kind: "ok",
+				artifacts: [{ handle: { kind: "fs", path: "outputs/written.md" }, role: "primary" }],
+			});
+		});
+
+		it("a mixed branch (one spelling per turn) is walked in order — the later call wins", async () => {
+			const branch = [
+				asstTool([{ type: "tool_use", name: "write", input: { path: "outputs/first.md" } }]),
+				asstTool([{ type: "toolCall", id: "c2", name: "write", arguments: { path: "outputs/second.md" } }]),
+			];
+			const c = textScanCollector({ pattern: /outputs\/[\w.-]+\.md/g, toHandle: fs, noun: "path" });
+			expect(await c.collect(ctxOf(branch) as never)).toEqual({
+				kind: "ok",
+				artifacts: [{ handle: { kind: "fs", path: "outputs/second.md" }, role: "primary" }],
+			});
+		});
+	});
+
+	describe("argKeys narrows which argument values the fallback consults", () => {
+		it("a sibling path quoted in `content` never outranks the `path` actually written", async () => {
+			const branch = [
+				asstTool([
+					{
+						type: "toolCall",
+						id: "c1",
+						name: "write",
+						arguments: { path: "outputs/mine.md", content: "source: outputs/sibling.md\n# body" },
+					},
+				]),
+			];
+			const c = textScanCollector({
+				pattern: /outputs\/[\w.-]+\.md/g,
+				toHandle: fs,
+				noun: "path",
+				argKeys: ["path"],
+			});
+			expect(await c.collect(ctxOf(branch) as never)).toEqual({
+				kind: "ok",
+				artifacts: [{ handle: { kind: "fs", path: "outputs/mine.md" }, role: "primary" }],
+			});
+		});
+
+		it("without argKeys every string argument is scanned (unchanged default)", async () => {
+			const branch = [
+				asstTool([
+					{
+						type: "toolCall",
+						id: "c1",
+						name: "write",
+						arguments: { path: "outputs/mine.md", content: "source: outputs/sibling.md" },
+					},
+				]),
+			];
+			const c = textScanCollector({ pattern: /outputs\/[\w.-]+\.md/g, toHandle: fs, noun: "path" });
+			const r = await c.collect(ctxOf(branch) as never);
+			// Object.entries order: path first, then content — the last hit is content's.
+			expect(r.kind === "ok" && r.artifacts[0]?.handle).toEqual({ kind: "fs", path: "outputs/sibling.md" });
+		});
+
+		it("a key the call does not carry contributes nothing (falls to fatal)", async () => {
+			const branch = [
+				asstTool([{ type: "toolCall", id: "c1", name: "write", arguments: { content: "outputs/x.md" } }]),
+			];
+			const c = textScanCollector({
+				pattern: /outputs\/[\w.-]+\.md/g,
+				toHandle: fs,
+				noun: "path",
+				argKeys: ["path"],
+			});
+			expect((await c.collect(ctxOf(branch) as never)).kind).toBe("fatal");
+		});
+
+		it("throws at construction when argKeys is empty or non-string", () => {
+			expect(() => textScanCollector({ pattern: /x/g, toHandle: fs, noun: "path", argKeys: [] })).toThrow(
+				/textScanCollector: `argKeys` must be a non-empty array of strings when provided/,
+			);
+			expect(() => textScanCollector({ pattern: /x/g, toHandle: fs, noun: "path", argKeys: [1] as never })).toThrow(
+				/argKeys/,
+			);
+		});
+	});
 });

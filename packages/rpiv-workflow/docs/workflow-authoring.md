@@ -692,7 +692,7 @@ Grouped by discovery model:
 
 | Collector | Signature | What it does |
 |-----------|-----------|--------------|
-| `transcriptPathCollector` | `({ pattern: RegExp })` | Scans assistant text for the last regex match; emits one `fs` artifact. |
+| `transcriptPathCollector` | `({ pattern: RegExp, match?, argKeys? })` | Scans assistant text for the last regex match; on a miss, the string arguments of the agent's tool calls (`match` narrows by call, `argKeys` by argument key — e.g. `match: (tc) => tc.name === "write", argKeys: ["path"]`). Emits one `fs` artifact. |
 | `directoryPathCollector` | `({ dir, ext? })` | Wrapper over `transcriptPathCollector` for `<dir>/<file>.<ext>`. |
 | `urlCollector` | `({ pattern? })` | Scans for `https?://…`; emits a `url` handle. |
 
@@ -700,7 +700,7 @@ Grouped by discovery model:
 
 | Collector | Signature | What it does |
 |-----------|-----------|--------------|
-| `toolCallCollector` | `({ match, toArtifact })` | Walks every `tool_use` part; emits N artifacts via author's mappers. |
+| `toolCallCollector` | `({ match, toArtifact })` | Walks every tool-invocation part (Pi's `toolCall`/`arguments`, normalised to `{ name, input }`); emits N artifacts via author's mappers. |
 
 **Diff the filesystem:**
 

@@ -42,9 +42,21 @@ export interface TranscriptPathCollectorOpts {
 	 * by delegation (this factory keeps only its own pattern guard).
 	 */
 	match?: (tc: ToolCall) => boolean;
+	/**
+	 * Narrows the tool-argument fallback to these argument keys of a matching
+	 * call (e.g. `["path"]`) — forwarded verbatim to `textScanCollector`, whose
+	 * construction-time guard applies by delegation.
+	 */
+	argKeys?: readonly string[];
 }
 
 export function transcriptPathCollector(opts: TranscriptPathCollectorOpts): ArtifactCollector {
 	requireOpt("transcriptPathCollector", "pattern", "is required and must be a RegExp", opts.pattern instanceof RegExp);
-	return textScanCollector({ pattern: opts.pattern, toHandle: fs, noun: "path", match: opts.match });
+	return textScanCollector({
+		pattern: opts.pattern,
+		toHandle: fs,
+		noun: "path",
+		match: opts.match,
+		argKeys: opts.argKeys,
+	});
 }
