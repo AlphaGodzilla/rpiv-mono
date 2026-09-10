@@ -45,6 +45,9 @@ markdown-fence.ts   — FENCE_LINE_RE, fencedSpans, forEachLineOutsideFences, op
 elaboration.ts      — elaborationOutcome: the elaborations bucket collector + a parser adding body-derived
                       fence_walk / phase_headings beside the frontmatter, which the elaborate contract's enums refuse
                       (in-session validation retry, then one retryHaltedUnits re-dispatch) before the stitch runs
+design.ts           — designOutcome: the designs bucket collector + a parser adding path-derived filename_slice
+                      (`matches` iff the basename's slice-<N> token equals frontmatter slice_n), which the design-slice
+                      contract's enum refuses in-lane; slices.ts designSliceOf resolves identity slice_n-first, token second
 plan-phases.ts      — phases: frontmatter parsing (planPhaseRecords, MAX_PHASES cap), phaseFiles, withTestTwins,
                       FRONTMATTER_PHASE_FANOUT / ELABORATE_PHASE_FANOUT / IMPLEMENT_DAG_FANOUT / REVIEW_PHASE_ITERATE
                       wiring tables

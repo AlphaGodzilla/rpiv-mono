@@ -4,6 +4,7 @@
  * re-export targets a `.js` specifier (Node16 ESM, source stays `.ts`).
  */
 
+export { designOutcome, designParser, designStructure } from "./design.js";
 export { elaborationOutcome, elaborationParser, elaborationStructure } from "./elaboration.js";
 export {
 	allDimensionsPass,

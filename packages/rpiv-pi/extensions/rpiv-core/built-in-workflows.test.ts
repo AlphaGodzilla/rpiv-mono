@@ -79,7 +79,7 @@ import {
 	SHIP_PANEL_PROGRESS,
 	SLICE_PANEL_PROGRESS,
 } from "./built-ins/grade-panel.js";
-import { seedOnlyFindings } from "./built-ins/index.js";
+import { designOutcome, seedOnlyFindings } from "./built-ins/index.js";
 import { writeScopeVerdict } from "./built-ins/scope-checks.js";
 import { writeStructureVerdict } from "./built-ins/shared.js";
 import { deriveOutcomes } from "./outcome-derivation.js";
@@ -1504,6 +1504,11 @@ describe("SLICE_DESIGN_FANOUT (build design — deps + --upstream)", () => {
 
 	it("halts the run when every design unit of a generation fails (haltWhenAllFailed)", () => {
 		expect(designLoop().haltWhenAllFailed).toBe(true);
+	});
+
+	it("re-dispatches a contract-refused design unit once (retryHaltedUnits) and parses through designOutcome", () => {
+		expect(designLoop().retryHaltedUnits).toBe(1);
+		expect(findWorkflow("build").stages["slice-design"]?.outcome).toBe(designOutcome);
 	});
 
 	it("maps each slice's frontmatter deps to slice-N unit ids", async () => {
@@ -5529,7 +5534,30 @@ describe("build subplan cluster fanout (research threading + fail-loud mapping)"
 
 	// Finding 8 — an artifact whose identity can't be resolved must FAIL LOUD, not
 	// fall back to a positional guess that silently mis-routes and drops slices.
-	it("throws when a design filename carries no slice-<N> token (no positional fallback)", () => {
+	// The observed halt: a lane dropped the `_slice-3_` segment while its
+	// frontmatter `slice_n: 3` was right. The channel carries that frontmatter as
+	// `output.data`, so identity resolves from it and the filename is the fallback.
+	it("resolves a tokenless design filename from the channel's data.slice_n", async () => {
+		twoIndependentSlices();
+		const units = await subplanLoop().units({
+			cwd: tmpDir,
+			artifact: undefined,
+			state: {
+				named: {
+					slices: [out(sliceMap)],
+					designs: [
+						{ ...out(".rpiv/artifacts/designs/lv-2-the-face.md"), data: { slice_n: 1 } },
+						out(".rpiv/artifacts/designs/d_slice-2.md"),
+					],
+				},
+			} as unknown as RunView,
+		});
+		const prompts = units.map((u) => u.prompt).join("\n");
+		expect(prompts).toContain("--designs .rpiv/artifacts/designs/lv-2-the-face.md");
+		expect(prompts).toContain("--designs .rpiv/artifacts/designs/d_slice-2.md");
+	});
+
+	it("throws when a design carries neither slice_n nor a slice-<N> filename token (no positional fallback)", () => {
 		twoIndependentSlices();
 		expect(() =>
 			subplanLoop().units({
@@ -5542,7 +5570,7 @@ describe("build subplan cluster fanout (research threading + fail-loud mapping)"
 					},
 				} as unknown as RunView,
 			}),
-		).toThrow(/no 'slice-<N>' token|has no slice number/);
+		).toThrow(/no frontmatter 'slice_n' and no 'slice-<N>' filename token|has no slice number/);
 	});
 
 	it("takes the LATEST design when a slice is claimed twice (design-review re-emits — latest-wins, no throw)", async () => {
@@ -9032,13 +9060,14 @@ describe("grade panel unit-failed routing (dimension-bearing sentinels)", () => 
 		"plan-verdicts": verdicts,
 	});
 
-	it("wiring: the six grade-panel loops and build's elaborate fanout opt into retryHaltedUnits: 1; every other fanout stays without it", () => {
+	it("wiring: the six grade-panel loops and build's elaborate + slice-design fanouts opt into retryHaltedUnits: 1; every other fanout stays without it", () => {
 		const expected = [
 			"build:code",
 			"build:code-confirm",
 			"build:code-grade",
 			"build:plan-confirm",
 			"build:plan-grade",
+			"build:slice-design",
 			"build:slice-grade",
 			"ship:grade",
 		];

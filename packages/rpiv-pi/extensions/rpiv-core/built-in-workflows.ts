@@ -47,6 +47,7 @@ import {
 	codeGatePasses,
 	codeSnapshot,
 	confirmDue,
+	designOutcome,
 	ELABORATE_PHASE_FANOUT,
 	elaborationOutcome,
 	freshVerdicts,
@@ -751,7 +752,10 @@ const buildWorkflow = defineWorkflow({
 			progress: SLICE_PANEL_PROGRESS,
 		}),
 		// Design every slice in parallel.
-		"slice-design": produces({ skill: "design-slice", loop: SLICE_DESIGN_FANOUT }),
+		// `designOutcome` derives `filename_slice` beside the frontmatter so the
+		// design-slice contract refuses a path whose `_slice-<N>_` token is missing
+		// or disagrees with `slice_n` while the lane can still rename it.
+		"slice-design": produces({ skill: "design-slice", loop: SLICE_DESIGN_FANOUT, outcome: designOutcome }),
 		// One consolidated developer checkpoint over EVERY per-slice design, at the
 		// single fan-in seam where they all exist and nothing parallel is running.
 		// Presents the proposed shape (interfaces, data types, scope) and lets the
