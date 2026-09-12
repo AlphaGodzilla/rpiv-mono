@@ -7,6 +7,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dictation UI no longer freezes while a decode runs.** `recognizer.decode()` ran Whisper inference synchronously on the shared event loop, so the TUI froze for the length of every decode. Recognizer construction and decode now ride napi async work (`OfflineRecognizer.createAsync` / `decodeAsync`), keeping the splash render and the overlay responsive. Because a final decode can now still be in flight when the user commits, the session drains the finals chain before pasting to the editor; the drain races a 10 s timeout that falls back to the reducer merge (leaving an `stt.drain` breadcrumb), and commit teardown orders drain-then-abort so a drain-time failure still reaches `errors.log`. Once the signal is aborted the pipeline skips stranded decode work outright, and post-abort rejections no longer land in the error log as failures.
+- **Decodes serialize on the one native recognizer handle.** `SttEngine.recognize` FIFO-serializes calls, so a rolling partial and a chained final can no longer overlap on the handle sherpa holds no lock over.
+- **A settings save no longer reverts JSON-only keys.** Save handlers merge the draft against `voice.json` as read at save time, so a mid-session hand edit of a key the settings screen does not own round-trips instead of silently reverting.
+
+### Added
+
+- **`numThreads` in `voice.json`** tunes the recognizer's decode threads (default 4, integer 1–16, clamped). It is JSON-only: the settings screen shows it read-only and passes it through on save. Decode calls leave `stt.decode` latency breadcrumbs in the diagnostic log, and the diagnostic-log table documents the new `stt.decode` / `stt.drain` rows.
+
 ## [2.9.0] - 2026-09-01
 
 ## [2.8.0] - 2026-08-29
