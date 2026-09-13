@@ -9,9 +9,10 @@
  * the commands so the agent can route the developer to `/skill:<name>` instead of
  * improvising the workflow itself.
  *
- * Injected at `session_start` and re-injected after `session_compact`, mirroring
- * `injectRootGuidance` (session-hooks.ts owns the wiring). Stateless — both hooks
- * fire exactly once per (re)start, right after `resetInjectionState()`.
+ * Injected at `session_start`. After `session_compact`, session-hooks folds this
+ * constant into ONE deferred `before_agent_start` message on that exact session's
+ * next real user turn. It is never sent from the compaction hook: that would queue
+ * a steering item into overflow recovery and displace the interrupted task.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -35,7 +36,7 @@ export const PIPELINE_POINTER = [
 	"Other explicit-only commands: /skill:slice, /skill:revise, /skill:elaborate,",
 	"/skill:architecture-review, /skill:frontend-design",
 	"Workflow-internal (dispatched by lanes — never suggest): amend, design-slice,",
-	"design-review, synthesize, grade, remediate",
+	"design-review, synthesize, grade, remediate, quick-plan, acceptance",
 ].join("\n");
 
 export function injectPipelinePointer(pi: ExtensionAPI): void {

@@ -62,7 +62,16 @@ const RETRY_GLYPH = "⟲";
 // constant DISPLAY width so the status region starts at the same column on every row.
 const TAG_COL = 12;
 const MAX_LABEL_WIDTH = 40;
-const LABEL_LEADING = 4 + TAG_COL + 2;
+/** Cells the lane-row head `renderLaneRow` builds: the 2-cell selection gutter
+ *  (`CURSOR_SELECTED`/`CURSOR_UNSELECTED`) + the status glyph + its trailing space. */
+const LANE_HEAD_CELLS = 4;
+/** The two single-space inter-column separators following the tag and label columns. */
+const LABEL_SEPARATORS = 2;
+/** The label column's fixed lane-row overhead (head + tag column + separators). The measure
+ *  is lane-row-EXACT but unit-row-APPROXIMATE — `renderUnitRow` leads with 6 cells and no
+ *  tag column — so the `labelWidth` clamp in `renderLaneList` is deliberately approximate;
+ *  do not re-derive it from unit rows. */
+const LABEL_LEADING = LANE_HEAD_CELLS + TAG_COL + LABEL_SEPARATORS;
 const PROGRESS_MIN_WIDTH = 12;
 
 /** Per-status glyph; needs-input overrides it (see renderLaneRow). */
@@ -96,6 +105,17 @@ function padCol(theme: Theme, color: ThemeColor, text: string, width: number, bo
 	const gap = Math.max(0, width - visibleWidth(truncated));
 	const content = bold ? theme.bold(truncated) : truncated;
 	return theme.fg(color, content) + " ".repeat(gap);
+}
+
+/** Canonical `.rpiv/artifacts/` root every collector path shares — stripped for display to
+ *  reclaim ~16 dead columns; stored values keep the full path. */
+const ARTIFACTS_DISPLAY_PREFIX = ".rpiv/artifacts/";
+
+/** Display form of an artifact path — see `ARTIFACTS_DISPLAY_PREFIX` for the display-only/
+ *  stored-values split. Non-canonical paths (url/opaque/inline handles, out-of-tree fs paths)
+ *  pass through untouched. */
+function displayArtifact(path: string): string {
+	return path.startsWith(ARTIFACTS_DISPLAY_PREFIX) ? path.slice(ARTIFACTS_DISPLAY_PREFIX.length) : path;
 }
 
 /** The dock descriptor for a lane — the run's `--name` alias when it differs from the workflow,
@@ -280,12 +300,11 @@ function renderProgressRow(
 	if (progress.units) nameRaw += ` · units ${progress.units.done}/${progress.units.total}`;
 	const usageTally = formatUsageTally(usage);
 	if (usageTally) nameRaw += ` · ${usageTally}`;
-	// The run's primary artifact path (a `produces` stage emitted one) — rendered as a
-	// trailing `→ path` segment AFTER the usage tally so a completed row points at what
-	// it built. Inherits `muted` via the single theme.fg("muted", nameRaw) wrap below,
-	// same as the tally. Omitted entirely when `lastArtifact` is undefined, so a
-	// side-effect-only run renders byte-identical to before this field existed.
-	if (lastArtifact) nameRaw += ` → ${lastArtifact}`;
+	// The run's primary artifact path (a `produces` stage emitted one) — rendered as a trailing
+	// `→ <bucket>/<file>` AFTER the usage tally so a completed row points at what it built.
+	// Omitted when `lastArtifact` is undefined, so a side-effect-only run renders byte-identical
+	// to before this field existed.
+	if (lastArtifact) nameRaw += ` → ${displayArtifact(lastArtifact)}`;
 
 	const coloredName = theme.fg("muted", nameRaw);
 	const coreW = visibleWidth(prefix) + visibleWidth(nameRaw);
@@ -429,6 +448,42 @@ export function renderLiveOutputBorder(theme: Theme, width: number): string {
 	const remaining = width - visibleWidth(label);
 	if (remaining >= 0) return theme.fg("dim", label + "─".repeat(remaining));
 	return theme.fg("dim", truncateToWidth(label, Math.max(0, width)));
+}
+
+/**
+ * Render the end-of-run summary (the post-mortem recap) for ONE lane (console-only —
+ * the ambient dock never calls this, mirroring `renderStageBreakdown`). Reads the lane
+ * LIVE; a missing/evicted lane or a lane with no `recap` yields []. Auto-shows in the
+ * console's laneBlock (no toggle — distinct from the `s`-gated `renderStageBreakdown`),
+ * and ≤1 line by construction so the console's constant-height invariant holds. Its
+ * outcome can legitimately diverge from the lane chip (the accepted
+ * `droppedFailureRows` divergence: recap reads "completed" off the trail while the
+ * chip shows ✗ failed). `routingNotes`, when the recap carries them, render as
+ * dim parts between the artifact-arrow parts and the `⚠` reason — the
+ * honest pass-through floors' deferral notes, visible without claiming a line
+ * of their own.
+ */
+export function renderRecap(theme: Theme, width: number, runId: string): string[] {
+	const recap = getLane(runId)?.recap;
+	if (!recap) return [];
+	const parts: string[] = [];
+	const n = recap.artifacts.length;
+	if (n > 0) {
+		parts.push(theme.fg("muted", `→ ${displayArtifact(recap.artifacts[n - 1])}`));
+		if (n > 1) parts.push(theme.fg("dim", `+${n - 1} more`));
+	}
+	// Route-note recap — dim parts, ordered after the artifact-arrow parts and
+	// before the `⚠` failure-reason part (one part per note). The notes ride the
+	// SAME joined-and-truncated single line, so the console's constant-height
+	// invariant holds; a stop's note never appears here — the stopped refinement
+	// already renders it once as the `⚠` failureReason.
+	for (const note of recap.routingNotes ?? []) parts.push(theme.fg("dim", note));
+	// Failure reason only for a non-completed outcome that carries one.
+	if (recap.outcome !== "completed" && recap.failureReason) {
+		parts.push(theme.fg("warning", `⚠ ${recap.failureReason}`));
+	}
+	if (parts.length === 0) return [];
+	return [truncateToWidth(parts.join(" · "), width, "…")];
 }
 
 /**

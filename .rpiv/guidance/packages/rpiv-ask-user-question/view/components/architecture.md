@@ -40,21 +40,28 @@ interface StatefulView<P> extends Component {
 
 ## Row-Kind Branching
 ```typescript
-// view/components/wrapping-select.ts — the inline-input branch is the only place
-// where `kind === "other"` is special-cased at render time. All other row behavior
-// (auto-append, multi toggle gating, numbering) comes from the `ROW_INTENT_META`
-// table in `state/row-intent.ts`, consumed on the state side (state-reducer.ts,
-// key-router.ts, i18n-bridge.ts) — components never duplicate the rule.
+// view/components/wrapping-select.ts — `kind === "other"` is special-cased twice at
+// render time: (1) the inline-input branch when the row is active, and (2) draft
+// persistence when it is not — a non-empty in-flight `inputBuffer` draft replaces the
+// row's static "Type something." label so the draft stays visible while the cursor
+// browses other rows. All other row behavior (auto-append, multi toggle gating,
+// numbering) comes from the `ROW_INTENT_META` table in `state/row-intent.ts`,
+// consumed on the state side (state-reducer.ts, key-router.ts, i18n-bridge.ts) —
+// components never duplicate the rule.
 private shouldRenderAsInlineInput(item: WrappingSelectItem, isActive: boolean): boolean {
     return item.kind === "other" && isActive;
 }
 
-// Confirmed-row treatment is uniform across kinds — pointer (❯) + selectedText
-// styling come from focus, ✔ + label-override come from setConfirmedIndex.
-const isConfirmed = index === this.confirmedIndex;
+// Pointer (❯) + selectedText styling come from focus, ✔ + label-override come from
+// setConfirmedIndex — shared across kinds. But `other` rows additionally gate the ✔:
+// it is suppressed while a non-empty draft differs from the confirmed answer
+// (`confirmedLabelOverride ?? ""`), so a pending draft is never shown as committed.
+// When the row IS confirmed, `confirmedLabelOverride` still wins over the draft.
+const isConfirmed = index === this.confirmedIndex && !customDraftDiffersFromConfirmed;
+const baseLabel = customDraft ? customDraft : item.label;
 const label = isConfirmed
-    ? `${this.confirmedLabelOverride ?? item.label}${WrappingSelect.CONFIRMED_MARK}`
-    : item.label;
+    ? `${this.confirmedLabelOverride ?? baseLabel}${WrappingSelect.CONFIRMED_MARK}`
+    : baseLabel;
 ```
 
 ## Width-Correct Rendering Discipline
@@ -79,6 +86,7 @@ export function renderInlineInputRow(opts: RenderInlineInputOptions): string[] {
 
 ## Architectural Boundaries
 - **NO width math via `string.length`** — always `visibleWidth` / `wrapTextWithAnsi` / `truncateToWidth`
+- **The view never sees `\r`** — line terminators normalize once at tool entry (`tool/normalize-params.ts`, #192); pi-tui ≥0.84 splits `wrapTextWithAnsi` on `\r`, so a lone CR reaching the view would fragment option rows
 - **NO keystroke handling inside components** — `handleInput` is intentionally empty (`wrapping-select.ts`); the container routes keys
 - **NO setProps from outside the adapter** — bindings are the only `setProps` callers
 - **NO ad-hoc raw ANSI** — styling flows through `theme.fg/bold/bg` or injected `WrappingSelectTheme` callbacks; sole exception is the SGR 7/27 reverse-video cursor in `inline-input.ts`

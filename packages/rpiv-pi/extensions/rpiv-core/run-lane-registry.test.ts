@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetQuestionLifecycle, subscribeQuestionLifecycle } from "./question-lifecycle.js";
 import {
 	__resetRunLaneRegistry,
 	addStageUsage,
 	captureFinalSnapshot,
+	clearUnitLanes,
 	dequeueInput,
 	enqueueInput,
 	evictRun,
@@ -28,6 +30,7 @@ import {
 	setLaneProgress,
 	setLaneSessionFile,
 	setLaneStatus,
+	setRecap,
 	setUnitStarted,
 	subscribeLanes,
 	sweepRunningUnits,
@@ -176,6 +179,28 @@ describe("run-lane-registry", () => {
 			// Still settled exactly once — no double-resolve from the reactivation loop.
 			expect(pending.resolve).toHaveBeenCalledTimes(1);
 			expect(getUnit("run-1", SINGLE_UNIT_KEY)).toBeUndefined();
+		});
+
+		it("a LATE park on a retired lane settles immediately instead of stranding (abort races the relay)", () => {
+			// The x-key retires a lane while its run is in-flight; abort propagates
+			// asynchronously, so the child's relay park can land AFTER retireRun's one
+			// settle pass. First-retire-wins means no later settle runs — an accepted
+			// park would strand: needs-input clock stamped, `asked` emitted with no
+			// paired resolution, warp Blocked badge pinned. FAILS without the status gate.
+			const events: string[] = [];
+			const offLifecycle = subscribeQuestionLifecycle((e) => events.push(e.kind));
+			recordRun("run-1", "ship");
+			retireRun("run-1", "aborted"); // x-key optimistic retire, run still in-flight
+
+			const pending = makePending();
+			enqueueInput("run-1", SINGLE_UNIT_KEY, pending); // the child's late relay park
+			offLifecycle();
+
+			expect(pending.resolve).toHaveBeenCalledTimes(1);
+			expect(pending.resolve).toHaveBeenCalledWith(undefined);
+			expect(getLane("run-1")?.needsInputSince).toBeUndefined(); // clock not stamped
+			expect(unitNeedsInput("run-1", SINGLE_UNIT_KEY)).toBe(false); // nothing queued
+			expect(events).toEqual([]); // no `asked` without a park — the badge never pins
 		});
 	});
 
@@ -345,6 +370,72 @@ describe("run-lane-registry", () => {
 			recordRun("run-1", "ship"); // re-record the SAME id — resume reuses it
 			expect(getLane("run-1")?.status).toBe("running"); // reactivated
 			expect(getLane("run-1")?.lastArtifact).toBeUndefined(); // stale path cleared
+		});
+	});
+
+	describe("retireRun — recap NOT stored (single source of truth is setRecap)", () => {
+		it("retireRun does NOT store recap — single source of truth is setRecap", () => {
+			// retireRun never touches entry.recap — the lane's recap stays undefined
+			// through retirement until setRecap, the sole writer, stores it.
+			recordRun("run-1", "ship");
+			retireRun("run-1", "completed", undefined, ".rpiv/artifacts/builds/ship.md");
+			expect(getLane("run-1")?.lastArtifact).toBe(".rpiv/artifacts/builds/ship.md");
+			expect(getLane("run-1")?.recap).toBeUndefined(); // retireRun wrote nothing
+
+			const recap = { outcome: "completed" as const, artifacts: [".rpiv/artifacts/builds/ship.md"] };
+			setRecap("run-1", recap);
+			expect(getLane("run-1")?.recap).toBe(recap); // setRecap is the sole writer
+		});
+
+		it("recordRun reactivation clears a prior run's recap (resume never leaks the old recap)", () => {
+			recordRun("run-1", "ship");
+			retireRun("run-1", "completed"); // terminal lane (the resume scenario)
+			const recap = { outcome: "completed" as const, artifacts: [".rpiv/artifacts/builds/ship.md"] };
+			setRecap("run-1", recap); // the sole writer
+			expect(getLane("run-1")?.recap).toBe(recap);
+
+			recordRun("run-1", "ship"); // re-record the SAME id — resume reuses it
+			expect(getLane("run-1")?.status).toBe("running"); // reactivated
+			expect(getLane("run-1")?.recap).toBeUndefined(); // stale recap cleared
+		});
+	});
+
+	describe("setRecap — sole recap writer (ungated by terminal status)", () => {
+		it("stores the recap on a RUNNING lane and notifies", () => {
+			recordRun("run-1", "ship");
+			const listener = vi.fn();
+			subscribeLanes(listener);
+			const recap = { outcome: "completed" as const, artifacts: [] };
+			setRecap("run-1", recap);
+			expect(getLane("run-1")?.recap).toBe(recap);
+			expect(listener).toHaveBeenCalledTimes(1); // notify → console re-renders
+		});
+
+		it("stores the recap on a lane ALREADY retired by an abort path", () => {
+			// The x-key stopSelected path (lane-console.ts) retires the lane to "aborted"
+			// while the run is still in-flight; when onWorkflowEnd later fires the recap must
+			// still land. setRecap is the SOLE recap writer precisely because it writes
+			// entry.recap regardless of terminal status — retireRun (which never touches
+			// recap) is a first-retire-wins no-op on the already-retired lane.
+			recordRun("run-1", "ship");
+			retireRun("run-1", "aborted"); // the x-key path — lane flips to "aborted" first
+			expect(getLane("run-1")?.status).toBe("aborted");
+			expect(getLane("run-1")?.recap).toBeUndefined(); // retireRun never stored a recap
+
+			// setRecap writes regardless of terminal status — the recap lands on the
+			// already-retired lane.
+			const recap = { outcome: "aborted" as const, artifacts: [] };
+			setRecap("run-1", recap);
+			expect(getLane("run-1")?.recap).toBe(recap); // stored despite the terminal status
+			expect(getLane("run-1")?.status).toBe("aborted"); // status untouched
+		});
+
+		it("is a no-op on a missing lane (fail-soft)", () => {
+			const listener = vi.fn();
+			subscribeLanes(listener);
+			expect(() => setRecap("nope", { outcome: "completed", artifacts: [] })).not.toThrow();
+			expect(listener).not.toHaveBeenCalled();
+			expect(getLane("nope")).toBeUndefined();
 		});
 	});
 
@@ -1151,6 +1242,117 @@ describe("run-lane-registry", () => {
 			// retained finalUsage is the single source the render sums for this stage.
 			expect(getLane("run-1")?.stageUsage.size).toBe(0);
 			expect(getUnit("run-1", SINGLE_UNIT_KEY)?.finalUsage?.input).toBe(100);
+		});
+	});
+
+	describe("teardown settle ordering — notify precedes `cleared`; subscribers observe committed state", () => {
+		beforeEach(() => {
+			// The file-level hook resets the registry; lifecycle listeners are this describe's own.
+			__resetQuestionLifecycle();
+		});
+
+		/** Wire both streams into ONE shared sequence — `notify` for lane subscribers,
+		 *  `<reason>:<unitIndex>[<state>]` for lifecycle events. `[<state>]` renders what a
+		 *  lifecycle subscriber observes about the lane AT EMIT TIME (post-mutation): the
+		 *  surviving unit keys, `empty` for a cleared units map, `lane-gone` for an evicted
+		 *  lane. `stop` unwires both so a test's listeners never leak past it. */
+		function trace(): { seq: string[]; stop: () => void } {
+			const seq: string[] = [];
+			const offLanes = subscribeLanes(() => seq.push("notify"));
+			const offLifecycle = subscribeQuestionLifecycle((e) => {
+				if (e.kind === "asked") {
+					seq.push(`asked:${e.unitIndex}`);
+					return;
+				}
+				const lane = getLane(e.runId);
+				const state = lane === undefined ? "lane-gone" : [...lane.units.keys()].join("|") || "empty";
+				seq.push(`${e.reason}:${e.unitIndex}[${state}]`);
+			});
+			return {
+				seq,
+				stop: () => {
+					offLanes();
+					offLifecycle();
+				},
+			};
+		}
+
+		it("recordRun reactivation: notify precedes `cleared` per parked unit in Map insertion order", () => {
+			recordRun("run-1", "ship");
+			const a = makePending();
+			const b = makePending();
+			enqueueInput("run-1", 1, a); // park unit 1 BEFORE unit 0 — emission follows insertion order, not index order
+			enqueueInput("run-1", 0, b);
+			const { seq, stop } = trace();
+			recordRun("run-1", "ship"); // reactivate (a resume reuses the run id)
+			stop();
+			// units map already empty at emit time; emits follow Map insertion order (1, then 0)
+			expect(seq).toEqual(["notify", "cleared:1[empty]", "cleared:0[empty]"]);
+			expect(a.resolve).toHaveBeenCalledTimes(1);
+			expect(a.resolve).toHaveBeenCalledWith(undefined);
+			expect(b.resolve).toHaveBeenCalledTimes(1);
+			expect(b.resolve).toHaveBeenCalledWith(undefined);
+		});
+
+		it("a FRESH recordRun notifies without emitting (nothing was ever parked)", () => {
+			const { seq, stop } = trace();
+			recordRun("run-1", "ship");
+			stop();
+			expect(seq).toEqual(["notify"]); // no `cleared` — no unit had parked input
+		});
+
+		it("retireRun: notify precedes `cleared`; resolvers settle with undefined; unit rows survive", () => {
+			recordRun("run-1", "ship");
+			const pending = makePending();
+			enqueueInput("run-1", 0, pending);
+			const { seq, stop } = trace();
+			retireRun("run-1", "completed");
+			stop();
+			expect(seq).toEqual(["notify", "cleared:0[0]"]); // the unit row is retained post-retirement
+			expect(pending.resolve).toHaveBeenCalledTimes(1);
+			expect(pending.resolve).toHaveBeenCalledWith(undefined);
+			// Idempotent second retire: neither notifies nor emits, and never re-settles.
+			const second: string[] = [];
+			const offLanes = subscribeLanes(() => second.push("notify"));
+			const offLifecycle = subscribeQuestionLifecycle((e) => second.push(e.kind));
+			retireRun("run-1", "failed");
+			offLanes();
+			offLifecycle();
+			expect(second).toEqual([]);
+			expect(pending.resolve).toHaveBeenCalledTimes(1);
+		});
+
+		it("evictRun: notify precedes `cleared`; the lane is already gone when `cleared` fires", () => {
+			recordRun("run-1", "ship");
+			const pending = makePending();
+			enqueueInput("run-1", 0, pending);
+			const { seq, stop } = trace();
+			evictRun("run-1");
+			stop();
+			expect(seq).toEqual(["notify", "cleared:0[lane-gone]"]);
+			expect(pending.resolve).toHaveBeenCalledTimes(1);
+			expect(pending.resolve).toHaveBeenCalledWith(undefined);
+		});
+
+		it("clearUnitLanes: notify precedes `cleared`; the units map is already empty when `cleared` fires", () => {
+			recordRun("run-1", "ship");
+			const pending = makePending();
+			enqueueInput("run-1", 0, pending);
+			const { seq, stop } = trace();
+			clearUnitLanes("run-1");
+			stop();
+			expect(seq).toEqual(["notify", "cleared:0[empty]"]);
+			expect(pending.resolve).toHaveBeenCalledTimes(1);
+			expect(pending.resolve).toHaveBeenCalledWith(undefined);
+			expect(getLane("run-1")?.needsInputSince).toBeUndefined(); // lane clock reset with the generation
+		});
+
+		it("clearUnitLanes on an EMPTY map neither notifies nor emits", () => {
+			recordRun("run-1", "ship");
+			const { seq, stop } = trace();
+			clearUnitLanes("run-1"); // nothing to clear — the guard no-ops
+			stop();
+			expect(seq).toEqual([]);
 		});
 	});
 });

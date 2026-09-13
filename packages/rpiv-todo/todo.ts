@@ -7,7 +7,7 @@
  * surface — it mirrors `packages/rpiv-ask-user-question/ask-user-question.ts`
  * which keeps the tool registration at the package root.
  *
- * Public re-exports below preserve the pre-refactor import surface so that
+ * Public re-exports below preserve the package-root import surface so that
  * `index.ts`, `todo-overlay.ts`, and the global `test/setup.ts` `beforeEach`
  * continue to import from `./todo.js`.
  */
@@ -37,7 +37,7 @@ const SECTION_IN_PROGRESS = "── In Progress ──";
 const SECTION_COMPLETED = "── Completed ──";
 
 // ---------------------------------------------------------------------------
-// Public re-exports — pre-refactor consumers (overlay, tests, index.ts) keep
+// Public re-exports — existing consumers (overlay, tests, index.ts) keep
 // importing from `./todo.js`. New code may opt into deeper imports.
 // ---------------------------------------------------------------------------
 
@@ -55,7 +55,7 @@ export { TOOL_NAME } from "./tool/types.js";
 export const DEFAULT_PROMPT_SNIPPET = "Manage a task list to track multi-step progress";
 export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	"Use `todo` for complex work with 3+ steps, when the user gives you a list of tasks, or immediately after receiving new instructions to capture requirements. Skip it for single trivial tasks and purely conversational requests.",
-	"When starting any task, mark it in_progress BEFORE beginning work. Mark it completed IMMEDIATELY when done — never batch completions. Exactly one task should be in_progress at a time.",
+	"When starting a task from the todo list, mark it in_progress BEFORE beginning work. Mark it completed IMMEDIATELY when done — never batch completions. Exactly one task in_progress at a time.",
 	"Never mark a task completed if tests are failing, the implementation is partial, or you hit unresolved errors — keep it in_progress and create a new task for the blocker instead.",
 	"Task status is a 4-state machine: pending → in_progress → completed, plus deleted as a tombstone. Pass activeForm (present-continuous label, e.g. 'researching existing tool') when marking in_progress.",
 	'To change a task\'s status, call update with the task id and the target status, e.g. {"action":"update","id":3,"status":"completed"} or {"action":"update","id":3,"status":"in_progress","activeForm":"writing tests"}. status is the field that changes the task; an update without a mutable field (status or another) is rejected.',

@@ -14,7 +14,7 @@ rpiv-mono/
 │   └── test-utils/               — Private workspace package: shared test fixtures (not published)
 ├── test/                         — Repo-wide Vitest setup (homedir stub + env hygiene + pi-ai//compat mocks + beforeEach singleton resets)
 ├── scripts/                      — Lockstep release pipeline (release.mjs + sync-versions.js) + repo guards (check-no-decision-codes.mjs, check-slice-overlap.mjs)
-├── thoughts/shared/              — Pipeline artifacts: questions/, research/, designs/, plans/, reviews/ (gitignored)
+├── thoughts/shared/              — Pipeline artifacts: questions/, research/, solutions/, designs/, plans/, reviews/ (gitignored)
 ├── vitest.config.ts              — Single Vitest runner; `include: ['packages/*/**/*.test.ts']`, setupFiles `['./test/setup.ts']`
 ├── tsconfig.base.json            — Single shared TS config; no per-package tsconfig.json (rpiv-site has its own — excluded here)
 ├── package.json                  — npm workspaces root
@@ -25,7 +25,7 @@ rpiv-mono/
 
 **Plugin discovery**: each extension package's `package.json` carries a `pi` field — `pi.extensions: ["./index.ts"]` (`["./extension.ts"]` for rpiv-workflow/rpiv-telemetry; `["./extensions"]` for rpiv-pi) and optionally `pi.skills: ["./skills"]`; non-extension packages (rpiv-config, rpiv-site, test-utils) have no `pi` field. Pi loads the default-exported function with an `ExtensionAPI` instance.
 
-**Sibling registry**: `packages/rpiv-pi/extensions/rpiv-core/siblings.ts` is the single source of truth. Adding a sibling here propagates to `/rpiv-setup`, missing-plugin warnings, and presence detection (regex over `~/.pi/agent/settings.json`). A parallel `LEGACY_SIBLINGS` registry drives prune-on-upgrade for superseded packages. **No runtime imports of siblings** — Phase 1 zero-cross-imports contract.
+**Sibling registry**: `packages/rpiv-pi/extensions/rpiv-core/siblings.ts` is the single source of truth. Adding an entry here propagates to `/rpiv-setup`, missing-plugin warnings, and presence detection (regex over `~/.pi/agent/settings.json`). The registry is architectural, not just family bookkeeping: it covers registered extensions generally — including pinned third-party runtime deps the family needs installed (the `@tintinweb/pi-subagents` Agent dispatcher, registered with a fork-detection regex; its unscoped legacy name rides `LEGACY_SIBLINGS` and is pruned on upgrade). A parallel `LEGACY_SIBLINGS` registry drives prune-on-upgrade for superseded packages. **No runtime imports of siblings** — Phase 1 zero-cross-imports contract.
 
 **Opt-in extensions**: a published sibling becomes opt-in by being **absent from `siblings.ts`** (and from `rpiv-pi/package.json` `peerDependencies`). It still rides lockstep + shared CI infrastructure via the `packages/*` glob, but `/rpiv-setup` won't suggest it — users install it explicitly with `pi install`. `rpiv-voice`, `rpiv-btw`, and `rpiv-warp` are currently opt-in this way. Private packages (`"private": true`) are a separate concern — they skip publish but otherwise follow the same lockstep rules; today's private set is `rpiv-site`, `rpiv-telemetry`, and `test-utils` (`rpiv-telemetry` is a private Pi extension — it ships `pi.extensions` but is absent from `siblings.ts`).
 
@@ -52,14 +52,14 @@ Husky hooks (local-only):
 # Conventions
 
 - **Lockstep versions**: every `packages/*/package.json` shares one `version`. Enforced by `sync-versions.js` (exit 1 on drift). `"private": true` packages bump too but are skipped at publish. **Naming**: directory `rpiv-<feature>` ↔ npm `@juicesharp/rpiv-<feature>`.
-- **Sibling deps as `peerDependencies: "*"`** — `rpiv-pi` peer-pins every registered sibling (not opt-in ones) and `pi-*` runtime; bundlers never include them.
-- **`files` arrays** explicitly list `.ts` source + asset directories (e.g., `prompts/`); `.rpiv/` is never shipped; directory entries need a `!**/*.test.ts` negation (as in rpiv-pi/rpiv-web-tools/rpiv-workflow) to keep co-located tests out of the tarball.
+- **Sibling deps as `peerDependencies: "*"`** — `rpiv-pi` peer-pins every registered sibling and `pi-*` runtime; bundlers never include them.
+- **`files` arrays** explicitly list `.ts` source + asset directories (e.g., `prompts/`); `.rpiv/` is never shipped; directory entries need a `!**/*.test.ts` negation (as in rpiv-pi/rpiv-web-tools/rpiv-workflow/rpiv-advisor) to keep co-located tests out of the tarball; dev-only fixture trees are excluded the same way (rpiv-pi's `built-ins/__fixtures__/`).
 - **`type: "module"` everywhere** with Node16 resolution; relative imports use `.js` extensions from `.ts` source. Test files co-locate as `*.test.ts` next to production sources.
 - **No decision-code citations in committed `.ts`** — comments state the contract in place, never cite parenthesized plan/phase codes; enforced by `scripts/check-no-decision-codes.mjs` (`npm run check:decision-codes`, the first pre-commit stage).
 
 <important if="you are cutting or planning a release">
 ## Releasing
-- Publishing is local-only — CI (`.github/workflows/ci.yml`) runs check + coverage but never publishes. Use `node scripts/release.mjs` from monorepo root — never `npm version` inside a package.
+- Publishing is local-only — CI (`.github/workflows/ci.yml`) runs check + coverage but never publishes npm packages (the marketing site deploys separately via `deploy-site.yml`). Use `node scripts/release.mjs` from monorepo root — never `npm version` inside a package.
 - Lockstep means every workspace package gets the same new version. `"private": true` blocks publish but not version bumping. Detailed pipeline: see `.rpiv/guidance/scripts/architecture.md`
 </important>
 
@@ -80,8 +80,8 @@ Husky hooks (local-only):
 <important if="you are writing or modifying tests in any package">
 ## Test Authoring Contract
 - **Location**: co-locate `*.test.ts` next to production sources. Vitest's root `include` glob (`packages/*/**/*.test.ts`) discovers them automatically.
-- **Repo-wide setup** (`test/setup.ts`, runs once per worker before any test file):
-  - `process.env.HOME` + `USERPROFILE` point to a fresh `mkdtempSync` tmpdir — production modules cache `homedir()` at module-load, so this MUST happen before any package import.
+- **Repo-wide setup** (`test/setup.ts`, runs once per worker before any test file imports):
+  - `process.env.HOME` + `USERPROFILE` point to a fresh `mkdtempSync` tmpdir — production modules cache `homedir()` at module-load, so this MUST happen before any package import. One sanctioned exception exists today: setup statically imports `configPath` from `@juicesharp/rpiv-config` (ESM-hoisted above the HOME assignment) — safe only because rpiv-config resolves paths lazily; every other production import in setup is dynamic inside `beforeEach`
   - `@earendil-works/pi-ai` is partially mocked via `importOriginal()` (stubs `getSupportedThinkingLevels`; keeps `StringEnum` intact for module-load consumers); `completeSimple` is stubbed on the separate `@earendil-works/pi-ai/compat` mock, because production resolves it through the `loadCompleteSimple()` shim that prefers `/compat`.
   - `beforeEach` enforces four reset rules: (1) every package with module-level singleton state exports a reset function and is invoked from `beforeEach`; (2) every `globalThis[Symbol.for(...)]` cache that intentionally survives `vi.resetModules()` is cleared; (3) every config file a package persists under `~/.config/rpiv-<name>/` (or `~/.pi/`) is `rmSync`-ed so filesystem-driven detection starts from a clean state — new code resolves these paths via `@juicesharp/rpiv-config`'s XDG-aware `configPath()` (honors `XDG_CONFIG_HOME`, one-way legacy fallback via `loadJsonConfigWithLegacyFallback()`); (4) env hygiene — `PI_CODING_AGENT_DIR`, `XDG_CONFIG_HOME`, and `WEB_SEARCH_PROVIDER` are deleted (at module load AND per test) and the XDG pi agent dir (`~/.config/pi/agent`) is `rmSync`-ed.
 - **Fixtures**: import factories from `@juicesharp/rpiv-test-utils` — see `.rpiv/guidance/packages/test-utils/architecture.md`.
@@ -92,8 +92,8 @@ Husky hooks (local-only):
 <important if="you are touching tool registration, schemas, or session hooks anywhere in the monorepo">
 ## Cross-Package Pi Conventions
 - Tool params via the standalone `typebox` package (`import { Type } from "typebox"`) `Type.Object({...})`; the `description` field doubles as LLM-facing prompt copy. (Two `rpiv-workflow` test files still import `@sinclair/typebox`.)
-- Tool result envelope: `{ content: [{ type: "text", text }], details: <typed object> }` — `details` is what `reconstruct*State()` replays after `session_compact` / `/reload`.
-- pi >= 0.80 hosts export `completeSimple` from pi-ai's `/compat` entrypoint (pre-0.80 hosts: package root, no `/compat`); consumers (`rpiv-advisor`, `rpiv-btw`) call it through a per-package `pi-compat.ts` `loadCompleteSimple()` shim — tries `/compat` first, falls back to the root entrypoint only on module-resolution failures.
+- Tool result envelope: `{ content: [{ type: "text", text }], details: <typed object> }` — `details` is the persisted replay snapshot: replay handlers walking the session branch (e.g. rpiv-todo's `replayFromBranch()`, wired to `session_start` / `session_compact` / `session_tree`) rebuild module state from it after compaction or `/reload`.
+- pi >= 0.80 hosts export `completeSimple` from pi-ai's `/compat` entrypoint (pre-0.80 hosts: package root, no `/compat`); consumers (`rpiv-advisor`, `rpiv-btw`) call it through a per-package `pi-compat.ts` `loadCompleteSimple()` shim — tries `/compat` first, falls back to the root entrypoint only on module-resolution failures. Newer hosts additionally expose an auth-aware `ModelRuntime.completeSimple` facade off `ctx.modelRegistry` — consumers prefer the facade and pass only `{ signal }` (never explicit `apiKey`/`headers`, which would bypass credential-derived baseUrl).
 - System prompts loaded once at module init via `readFileSync(fileURLToPath(new URL("./prompts/X.txt", import.meta.url))).trimEnd()` — ESM-safe, cache-stable.
 - Sibling-owned widget pattern: `setWidget(KEY, factory, { placement: "aboveEditor" })` register-once + `tui.requestRender()` on update — see `.rpiv/guidance/packages/rpiv-todo/architecture.md`.
 - For tool-specific patterns, consult the relevant package's `.rpiv/guidance/packages/<pkg>/architecture.md`.

@@ -5,6 +5,47 @@ All notable changes to `@juicesharp/rpiv-todo` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-09-12
+
+## [2.9.0] - 2026-09-01
+
+## [2.8.0] - 2026-08-29
+
+## [2.7.1] - 2026-08-24
+
+## [2.7.0] - 2026-08-21
+
+## [2.6.4] - 2026-08-20
+
+## [2.6.3] - 2026-08-20
+
+## [2.6.2] - 2026-08-18
+
+### Changed
+
+- The todo overlay now follows Pi's tool-output expansion mode: expanding shows every task instead of retaining the `+N more` summary, while collapsing reapplies `maxWidgetLines`.
+
+### Fixed
+
+- The in_progress prompt guideline now says "a task from the todo list" instead of "any task", so it no longer overrides the "skip it for single trivial tasks" rule in Pi's flat guideline list and pushes the model into one-item todo lists for every request (#154).
+
+## [2.6.1] - 2026-08-17
+
+### Added
+
+- Package card cover on pi.dev: `package.json` now declares `pi.image` pointing at the package's `docs/cover.png`.
+
+## [2.6.0] - 2026-08-15
+
+## [2.5.2] - 2026-08-14
+
+## [2.5.1] - 2026-08-14
+
+## [2.5.0] - 2026-08-13
+
+### Fixed
+- Terminal control characters (ANSI/C1 escape sequences, newlines, bidi overrides) in model-controlled task text — subject, description, activeForm, owner — are now stripped before terminal rendering (#151, #152).
+
 ## [2.4.0] - 2026-08-03
 
 ## [2.3.1] - 2026-07-31

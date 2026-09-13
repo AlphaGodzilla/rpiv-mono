@@ -12,7 +12,8 @@ Pure state layer for the `todo` tool — owns the canonical shape, the reducer, 
 - **`../index.ts`** (composer): wires `replayFromBranch` into `session_start`/`session_compact`/`session_tree`, committing each replay snapshot via `replaceState`; `evictSession` + render-pointer teardown on `session_shutdown`
 - **`../todo.ts`** (tool registrar): `execute()` runs the reducer and `commitState`s the result
 - **`../todo-overlay.ts`** (widget): reads live state via `getRenderState()` (the ctx-less foreground slot — `./state/store.js`) between renders
-- **`test/setup.ts`**: imports `__resetState` for the global `beforeEach`
+- **`../todo.ts`** re-exports the reducer/store/graph/types symbols so existing consumers keep importing from `./todo.js`
+- **`test/setup.ts`** (repo root): dynamically imports `../packages/rpiv-todo/todo.js` inside `beforeEach` and calls `__resetState()` (plus deletes the persisted config file)
 
 ## Module Structure
 ```
@@ -29,7 +30,7 @@ i18n-bridge.ts    — Locale-aware string lookup (only file in this folder that 
 ## Reducer Output (`Op` closed union)
 `applyTaskMutation(state, action, params) → { state, op }` where `op` is a **closed tagged union** spanning one variant per `TaskAction` plus a terminal `error` kind. The response envelope's `formatContent` is compiler-enforced exhaustive over `Op` — adding an action without extending the envelope fails the build. **Errors are values, never throws**: every failure path returns `{ kind: "error", message }`, never raises.
 
-The `update` variant carries `changed: boolean`, computed by the pure `taskChanged(before, after)` comparator (order-sensitive on `blockedBy`, JSON-equality on `metadata`) — a no-effect update lets the envelope report `No change` instead of `Updated #N`, so a model does not re-issue the same no-op update in a loop.
+The `update` variant carries `changed: boolean`, computed by the pure `taskChanged(before, after)` comparator (order-sensitive on `blockedBy`, JSON-equality on `metadata`) — a no-effect update lets the envelope report `No change` instead of `Updated #N`, so a model does not re-issue the same no-op update in a loop. `update` also merges `metadata` keys: a `null` value deletes the key, an empty record drops `metadata`.
 
 ## Store Mutation Seams (single writer)
 `store.ts` is the **only** module that mutates state. State lives as a `Map<sid, TaskState>` (per-session slots — a detached/child session keyed by a distinct sid cannot read or clobber another's tasks). The write surface is three sid-keyed seams — `commitState` (post-reducer), `replaceState` (replay), `evictSession` (drop a slot on `session_shutdown`) — plus the global `__resetState` (test isolation: takes no sid, clears the whole Map and the render pointer; signature kept stable so `test/setup.ts` needed no edit) and read-only accessors. A separate `activeRenderSession` pointer (`setActiveRenderSession`/`clearActiveRenderSession`) selects which slot the ctx-less readers render; it is NOT a task-state writer. Any other module that wants to change state must go through these seams.

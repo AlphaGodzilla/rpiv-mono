@@ -1,6 +1,6 @@
 {
 	"name": "@juicesharp/rpiv-advisor",
-	"version": "2.4.0",
+	"version": "2.10.0",
 	"description": "Pi extension. A second opinion the model can request from a stronger reviewer model before it acts.",
 	"keywords": [
 		"pi-package",
@@ -37,9 +37,11 @@
 		"!docs/*.jpg",
 		"!docs/*.svg",
 		"README.md",
-		"LICENSE"
+		"LICENSE",
+		"!**/*.test.ts"
 	],
 	"pi": {
+		"image": "https://raw.githubusercontent.com/juicesharp/rpiv-mono/main/packages/rpiv-advisor/docs/cover.png",
 		"extensions": [
 			"./index.ts"
 		]

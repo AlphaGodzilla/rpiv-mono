@@ -65,8 +65,6 @@ const LEGACY_TOP_LEVEL_KEY_PROVIDER = "brave";
 
 // ---------------------------------------------------------------------------
 // Config persistence — schema + reader/writer live in providers/config.ts.
-// The two local aliases keep the call-site shape identical to pre-refactor
-// (loadConfig / saveConfig) so the rest of this file reads unchanged.
 // ---------------------------------------------------------------------------
 
 const loadConfig = readConfig;

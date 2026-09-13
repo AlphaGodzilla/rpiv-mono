@@ -17,11 +17,19 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import type { Artifact } from "../handle.js";
+import { type Artifact, handleToString } from "../handle.js";
 import { formatError } from "../internal-utils.js";
 import { stateFilePath } from "./paths.js";
 import { enumerateRunIds, readFirstJsonlLine } from "./raw.js";
-import type { LoopCapRow, RoutingDecision, RunSummary, WorkflowHeader, WorkflowStage } from "./state.js";
+import type {
+	LoopCapRow,
+	RoutingDecision,
+	RunRecap,
+	RunSummary,
+	StageStatus,
+	WorkflowHeader,
+	WorkflowStage,
+} from "./state.js";
 
 /**
  * Reads every line, filters by shape (not position). Header has no
@@ -113,6 +121,14 @@ const hasValidSessionRef = (row: object): boolean => {
 const isRoutingDecision = (row: unknown): row is RoutingDecision =>
 	!!row && (row as { type?: unknown }).type === "routing";
 
+/**
+ * The routed-stop decision literal — mirrors routing-dsl's `STOP`, not
+ * imported so state/ stays a leaf. ONE local spelling for both consumers
+ * (the resume reader's separator scan and `trailingRoutingStop`), so the
+ * mirror can't drift within this module.
+ */
+const ROUTED_STOP = "stop";
+
 /** Shape guard for loop-cap telemetry rows. */
 const isLoopCapRow = (r: unknown): r is LoopCapRow => (r as { type?: unknown } | undefined)?.type === "loop-cap";
 
@@ -143,14 +159,29 @@ export function readAllStages(cwd: string, runId: string): WorkflowStage[] {
  * replays the trail as its system of record, and silently dropping a row
  * would replay a hole ("this stage never ran") — e.g. route onward past a
  * stage whose failure row lost its `status`.
+ *
+ * `stopBefore` maps a stage-row index to the routed-stop `RoutingDecision`
+ * that immediately precedes it in the trail — the fold's GENERATION
+ * SEPARATOR. A gate-stop halt writes [routing stop, failed stage row], and a
+ * later resume appends fresh rows behind that pair; when the halted gate is a
+ * fanout parent, its old and new unit rows would otherwise sit contiguous in
+ * this stage-only projection and mis-fold as ONE generation. Only stops
+ * FOLLOWED by a stage row are recorded: a trailing stop (the noteless-stop
+ * completion) stays invisible here, preserving the finished-run no-op resume.
  */
 export function readAllStagesForResume(
 	cwd: string,
 	runId: string,
-): { ok: true; rows: WorkflowStage[] } | { ok: false; detail: string } {
+): { ok: true; rows: WorkflowStage[]; stopBefore: Map<number, RoutingDecision> } | { ok: false; detail: string } {
 	const rows: WorkflowStage[] = [];
+	const stopBefore = new Map<number, RoutingDecision>();
+	let pendingStop: RoutingDecision | undefined;
 	for (const parsed of readParsedRows(cwd, runId)) {
 		if (isWorkflowStage(parsed) && hasValidSessionRef(parsed)) {
+			if (pendingStop) {
+				stopBefore.set(rows.length, pendingStop);
+				pendingStop = undefined;
+			}
 			rows.push(parsed);
 			continue;
 		}
@@ -158,8 +189,11 @@ export function readAllStagesForResume(
 			const label = typeof parsed.stage === "string" ? ` ("${parsed.stage}")` : "";
 			return { ok: false, detail: `stage row ${parsed.stageNumber}${label} failed the shape guard` };
 		}
+		// Non-stop routing rows are pure telemetry and stay invisible to the
+		// fold, exactly as before.
+		if (isRoutingDecision(parsed) && parsed.decision === ROUTED_STOP) pendingStop = parsed;
 	}
-	return { ok: true, rows };
+	return { ok: true, rows, stopBefore };
 }
 
 export function readRoutingDecisions(cwd: string, runId: string): RoutingDecision[] {
@@ -171,31 +205,125 @@ export function readLoopCaps(cwd: string, runId: string): LoopCapRow[] {
 	return readJsonlRows(cwd, runId, isLoopCapRow);
 }
 
-/**
- * Project a run's stage rows to the (stage, artifact) pairs that
- * actually carried at least one artifact. One entry per artifact —
- * stages with multi-artifact collectors expand to N entries. Used by
- * `notifyPartialArtifacts` for the failure recap and by past-runs UIs
- * (the `listRuns` API) for run summaries.
- *
- * `stage` is the workflow stage's record key (always present); `skill`
- * is the Pi skill body when this row recorded a skill stage (absent
- * for script stages).
- *
- * Reads from `output.artifacts` (single source); rows without an
- * output, or with an empty artifacts list, contribute nothing.
- */
 export function listArtifacts(
 	cwd: string,
 	runId: string,
 ): Array<{ stage: string; skill?: string; artifact: Artifact }> {
+	return stagesToArtifacts(readAllStages(cwd, runId));
+}
+
+/**
+ * The single stage→artifacts iteration, shared by `listArtifacts` and
+ * `summarizeRun`'s artifact projection. One entry per artifact in trail order;
+ * stages with multi-artifact collectors expand to N entries. Rows without an
+ * `output`, or with an empty artifacts list, contribute nothing.
+ */
+function stagesToArtifacts(stages: WorkflowStage[]): Array<{ stage: string; skill?: string; artifact: Artifact }> {
 	const out: Array<{ stage: string; skill?: string; artifact: Artifact }> = [];
-	for (const s of readAllStages(cwd, runId)) {
+	for (const s of stages) {
 		const artifacts = s.output?.artifacts;
 		if (!artifacts) continue;
 		for (const artifact of artifacts) out.push({ stage: s.stage, skill: s.skill, artifact });
 	}
 	return out;
+}
+
+/**
+ * On-disk `StageStatus` → recap outcome. The lone translation is
+ * `"skipped"`→`"cancelled"`: `"skipped"` is the FROZEN on-disk marker a
+ * `recordCancellation` row carries (see `StageStatus`), while the recap reads
+ * the canonical in-memory outcome. The other three statuses pass through
+ * unchanged. Frozen + exhaustive over `StageStatus`, so a new status breaks
+ * the record at compile time.
+ *
+ * Applied AFTER the `collected:true` filter — `recapOutcomeOf` checks that
+ * marker first and short-circuits to `"completed"` (see its doc).
+ */
+const STAGE_TO_RECAP_OUTCOME: Readonly<Record<StageStatus, RunRecap["outcome"]>> = {
+	completed: "completed",
+	failed: "failed",
+	skipped: "cancelled",
+	aborted: "aborted",
+};
+
+/**
+ * Terminal outcome for the LAST stage row of a run. A `collected:true` marker
+ * distinguishes a NON-terminal collect-all fanout unit halt: the run survived
+ * the halted unit (its output was rebuilt into a `failedOutput` sentinel), so
+ * the recap reads `"completed"` rather than the halted unit's on-disk terminal
+ * status. Every other row falls through to `STAGE_TO_RECAP_OUTCOME`.
+ */
+function recapOutcomeOf(last: WorkflowStage): RunRecap["outcome"] {
+	if (last.collected === true) return "completed";
+	return STAGE_TO_RECAP_OUTCOME[last.status];
+}
+
+/**
+ * The trail's routed-stop terminator, when present: the LAST well-formed row is
+ * a `RoutingDecision` with `decision: "stop"` (the literal mirrors routing-dsl's
+ * `STOP` — not imported so state/ stays a leaf). Only a routed stop leaves the
+ * routing row as the trail's tail: static string edges never audit, a natural
+ * chain end appends its terminal stage row after any routing row, and a resume
+ * appends new stage rows behind a prior stop. Fail-soft via `readParsedRows`.
+ * The stop row this returns is EXCLUDED from `summarizeRun`'s `routingNotes` —
+ * the stopped refinement renders its note once, as `failureReason`.
+ */
+function trailingRoutingStop(cwd: string, runId: string): RoutingDecision | undefined {
+	const rows = readParsedRows(cwd, runId);
+	const last = rows[rows.length - 1];
+	return isRoutingDecision(last) && last.decision === ROUTED_STOP ? last : undefined;
+}
+
+/**
+ * Terminal-state projection of one run's JSONL trail — the post-mortem recap a lane
+ * renders on end-of-run. Returns `undefined` when no stage row exists (no terminal row
+ * ⇒ outcome unrecoverable from the trail). `failureReason` is set only for a
+ * non-completed outcome with a present `last.errMsg`, so a collected halt's errMsg
+ * never leaks into a completed recap. Fail-soft by inheritance — never throws.
+ *
+ * A run whose trail ENDS with a routed `stop` (see `trailingRoutingStop`) is
+ * refined from `"completed"` to `"stopped"`: the runner reports a gate-routed
+ * stop as ordinary completion, but a stop-on-fail gate firing before the
+ * chain's natural end is not a success reading. The reason is the stopping
+ * edge's persisted `note` when it attached one (`gate`/`match` no-match
+ * diagnostics, `setRouteNote` on bespoke gates), else the bare stage name — a
+ * note-less trail still names WHERE the run stopped. The refinement only
+ * applies over a completed last stage row: a failed/aborted/cancelled tail
+ * keeps its own outcome + errMsg (and by write order such a tail follows any
+ * routing row anyway). The recap also carries `routingNotes` — every
+ * note-bearing FORWARD routing row, verbatim in trail order (stop-row notes
+ * excluded; the stopped refinement renders those once as `failureReason`).
+ * Set only when non-empty, on EVERY outcome — a failed run may carry
+ * earlier-hop notes (a gate explained itself before a later stage blew up).
+ */
+export function summarizeRun(cwd: string, runId: string): RunRecap | undefined {
+	const stages = readAllStages(cwd, runId);
+	if (stages.length === 0) return undefined;
+	const last = stages[stages.length - 1];
+	const outcome = recapOutcomeOf(last);
+	const header = readHeader(cwd, runId);
+	const recap: RunRecap = {
+		outcome,
+		artifacts: stagesToArtifacts(stages).map(({ artifact }) => handleToString(artifact.handle)),
+		workflow: header?.workflow,
+	};
+	if (outcome !== "completed" && last.errMsg !== undefined) recap.failureReason = last.errMsg;
+	// Route-note recap — rides EVERY outcome. Forward rows only; a stop row's
+	// note renders once, below, as the stopped-refinement failureReason — never
+	// twice. Set only when non-empty (absent, never []).
+	const routingNotes = readRoutingDecisions(cwd, runId).flatMap((r) =>
+		r.note !== undefined && r.decision !== ROUTED_STOP ? [r.note] : [],
+	);
+	if (routingNotes.length > 0) recap.routingNotes = routingNotes;
+	if (outcome === "completed") {
+		const stop = trailingRoutingStop(cwd, runId);
+		if (stop) {
+			recap.outcome = "stopped";
+			recap.failureReason =
+				stop.note !== undefined ? `stopped at ${stop.fromStage}: ${stop.note}` : `stopped at ${stop.fromStage}`;
+		}
+	}
+	return recap;
 }
 
 // ---------------------------------------------------------------------------

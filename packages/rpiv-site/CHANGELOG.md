@@ -5,6 +5,40 @@ All notable changes to `@juicesharp/rpiv-site` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-09-12
+
+### Added
+
+- "v2.1 to v2.9: teaching the pipeline to finish" blog post: version-by-version release notes for the arc since v2.0, framed around the six lines every change follows, each item with its rationale.
+
+## [2.9.0] - 2026-09-01
+
+## [2.8.0] - 2026-08-29
+
+## [2.7.1] - 2026-08-24
+
+## [2.7.0] - 2026-08-21
+
+## [2.6.4] - 2026-08-20
+
+## [2.6.3] - 2026-08-20
+
+## [2.6.2] - 2026-08-18
+
+## [2.6.1] - 2026-08-17
+
+## [2.6.0] - 2026-08-15
+
+### Changed
+
+- Document Pi's model-specific `max` thinking level in the model-sizing guide.
+
+## [2.5.2] - 2026-08-14
+
+## [2.5.1] - 2026-08-14
+
+## [2.5.0] - 2026-08-13
+
 ## [2.4.0] - 2026-08-03
 
 ## [2.3.1] - 2026-07-31

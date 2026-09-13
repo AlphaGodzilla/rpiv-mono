@@ -1440,6 +1440,112 @@ describe("sessions — halt routing", () => {
 		expect(onFailure).not.toHaveBeenCalled();
 	});
 
+	it("infra-death stop (error) on a collect-all unit → HARD terminal fail, UNCOLLECTED row (resume re-dispatches)", async () => {
+		// A dead child session (SDK/API error, OOM-killed process) must NOT be
+		// collected: a `collected:true` row is a PERMANENT skip — the resume fold
+		// rebuilds the sentinel and never re-dispatches the unit, turning one
+		// transient infra death into an unrepairable hole downstream (the
+		// slice-design → subplan-check incident). The hard failed row (no
+		// `collected`) leaves the slot unfilled so resume re-dispatches this unit.
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("partial", "error")] }],
+		});
+		const state = freshRunState();
+		const onUnitHalt = vi.fn();
+		const onStageError = vi.fn();
+		const onSuccess = vi.fn<(ctx: WorkflowHostContext, output: Output) => Promise<void>>(async () => {});
+
+		await executeStageSession(
+			chain.ctx as WorkflowHostContext,
+			stageSession({
+				cwd: tmpDir,
+				state,
+				stageName: "slice-design (slice-2)",
+				skill: "design-slice",
+				collectAll: true,
+				lifecycle: new LifecycleDispatcher({ onUnitHalt, onStageError }),
+				unit: { parent: "slice-design", role: "produce", index: 1, id: "slice-2", label: "slice 2/3" },
+				onSuccess,
+			}),
+		);
+
+		// Terminal: the run stops; no soft-halt lifecycle, no sentinel handed to the fold.
+		expect(state.termination.status).toBe("failed");
+		expect(onStageError).toHaveBeenCalledTimes(1);
+		expect(onUnitHalt).not.toHaveBeenCalled();
+		expect(onSuccess).not.toHaveBeenCalled();
+
+		// The failed row is UNCOLLECTED and carries the unit identity the resume
+		// drift guard reads — foldFanoutRow leaves its slot unfilled → re-dispatch.
+		const failed = readStageRows(tmpDir).find((r) => r.status === "failed")!;
+		expect(failed.collected).toBeUndefined();
+		expect(failed.parent).toBe("slice-design");
+		expect(failed.unitId).toBe("slice-2");
+		expect(failed.unitIndex).toBe(1);
+	});
+
+	it("infra-death stop (noResponse) on a collect-all unit → HARD terminal fail, UNCOLLECTED row", async () => {
+		// An empty child branch (the model never spoke — the child died before
+		// producing anything) is the same infra-death class: hard-fail so resume
+		// re-dispatches, never a collected skip.
+		const chain = createMockSessionChain({ cwd: tmpDir, steps: [{ branch: [] }] });
+		const state = freshRunState();
+		const onUnitHalt = vi.fn();
+		const onSuccess = vi.fn<(ctx: WorkflowHostContext, output: Output) => Promise<void>>(async () => {});
+
+		await executeStageSession(
+			chain.ctx as WorkflowHostContext,
+			stageSession({
+				cwd: tmpDir,
+				state,
+				collectAll: true,
+				lifecycle: new LifecycleDispatcher({ onUnitHalt }),
+				unit: { parent: "slice-design", role: "produce", index: 0, id: "slice-1", label: "slice 1/3" },
+				onSuccess,
+			}),
+		);
+
+		expect(state.termination.status).toBe("failed");
+		expect(onUnitHalt).not.toHaveBeenCalled();
+		expect(onSuccess).not.toHaveBeenCalled();
+		const failed = readStageRows(tmpDir).find((r) => r.status === "failed")!;
+		expect(failed.collected).toBeUndefined();
+		expect(failed.unitId).toBe("slice-1");
+	});
+
+	it("infra-death stop (toolUse) on a collect-all unit → HARD terminal fail, UNCOLLECTED row", async () => {
+		// A transcript that ENDS on a tool request is a truncated agentic loop —
+		// the signature of a child process killed mid-tool (e.g. the OOM killer).
+		// Same routing as error/noResponse: hard-fail, uncollected, re-dispatchable.
+		const chain = createMockSessionChain({
+			cwd: tmpDir,
+			steps: [{ branch: [mockAssistantMessage("running bash…", "toolUse")] }],
+		});
+		const state = freshRunState();
+		const onUnitHalt = vi.fn();
+		const onSuccess = vi.fn<(ctx: WorkflowHostContext, output: Output) => Promise<void>>(async () => {});
+
+		await executeStageSession(
+			chain.ctx as WorkflowHostContext,
+			stageSession({
+				cwd: tmpDir,
+				state,
+				collectAll: true,
+				lifecycle: new LifecycleDispatcher({ onUnitHalt }),
+				unit: { parent: "slice-design", role: "produce", index: 2, id: "slice-3", label: "slice 3/3" },
+				onSuccess,
+			}),
+		);
+
+		expect(state.termination.status).toBe("failed");
+		expect(onUnitHalt).not.toHaveBeenCalled();
+		expect(onSuccess).not.toHaveBeenCalled();
+		const failed = readStageRows(tmpDir).find((r) => r.status === "failed")!;
+		expect(failed.collected).toBeUndefined();
+		expect(failed.unitId).toBe("slice-3");
+	});
+
 	it("watchdog tool-timeout on a non-fan-out stage → terminal fail carrying the timeout reason", async () => {
 		// Same abort+toolTimeout shape, but a plain (non-collect-all) stage: the soft-halt gate
 		// falls through to a terminal failure whose errMsg is the watchdog reason.
@@ -1638,6 +1744,44 @@ describe("sessions — halt routing", () => {
 				count: 1,
 				reasons: ["bash command exceeded the 180s per-command timeout and was aborted: `find /`"],
 			},
+		});
+
+		const result = await reconstructState(tmpDir, workflow, header);
+
+		expect(result.ok).toBe(true); // NOT refused as malformed-row / version-mismatch
+		if (!result.ok) return; // type narrow
+		expect(result.state.stagesCompleted).toBe(1); // advanced exactly once — the field did not block the fold
+	});
+
+	it("a completed row carrying attemptOrdinal replays through the resume fold byte-for-byte (additive — no refusal)", async () => {
+		// The v3 additive ordinal field is resume-safe in the strikes-field style:
+		// the strict resume reader's deep guard tolerates the unknown field (like
+		// errMsg) and `foldKnownStage` reads only status/output/session/stage, so
+		// the row advances stagesCompleted once with no re-dispatch. (The WRITER
+		// stamps the ordinal on collected rows only; a completed row here pins the
+		// reader's tolerance, not the write path.)
+		const header: WorkflowHeader = {
+			runId: "run-resume-ordinal",
+			workflow: "test-wf",
+			input: "x",
+			ts: "2026-01-01T00:00:00.000Z",
+			v: STATE_SCHEMA_VERSION,
+		};
+		const workflow: Workflow = {
+			name: "test-wf",
+			start: "test",
+			stages: { test: { kind: "side-effect", sessionPolicy: "fresh" } },
+			edges: { test: "stop" },
+		};
+		appendHeader(tmpDir, header);
+		appendStage(tmpDir, header.runId, {
+			stageNumber: 1,
+			stage: "test",
+			skill: "test",
+			status: "completed",
+			ts: "2026-01-01T00:00:01.000Z",
+			session: { id: "s1" },
+			attemptOrdinal: 1,
 		});
 
 		const result = await reconstructState(tmpDir, workflow, header);

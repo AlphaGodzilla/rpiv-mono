@@ -16,6 +16,8 @@
 
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
+import type { RunRecap } from "@juicesharp/rpiv-workflow";
+
 import { addLaneUsage, type LaneUsage, toLaneUsage } from "./lane-usage.js";
 import { emitQuestionAsked, emitQuestionResolved } from "./question-lifecycle.js";
 
@@ -86,8 +88,7 @@ export interface PendingInput {
 export const SINGLE_UNIT_KEY = -1;
 
 /**
- * One fan-out unit's switchable sub-lane. Bundles everything that used to
- * live as a single scalar on `LaneEntry` — the live child session, the terminal
+ * One fan-out unit's switchable sub-lane. Bundles the live child session, the terminal
  * snapshot (branch/cwd/tool-defs), the durable disk-fallback pointer, and the
  * deferred-input queue — so each concurrent unit owns its own slot keyed by its
  * declared fan-out `index`. Under fan-out a sibling's teardown can never clobber
@@ -201,7 +202,7 @@ export interface LaneEntry {
 	/**
 	 * Primary artifact path at run termination — `RunWorkflowResult.lastArtifact`
 	 * captured at `retireRun` (the runner's terminal `onWorkflowEnd`), so a completed
-	 * lane row can surface `→ .rpiv/artifacts/<bucket>/<file>.md` as a trailing
+	 * lane row can surface `→ <bucket>/<file>.md` as a trailing
 	 * segment. Undefined for a side-effect-only run (no `produces` stage emitted a
 	 * primary artifact) and for aborted/failed runs (the terminal writers pass ≤3
 	 * args). Cleared on resume (`recordRun` reactivation) so a resumed run never
@@ -209,6 +210,16 @@ export interface LaneEntry {
 	 * clears.
 	 */
 	lastArtifact?: string;
+	/**
+	 * End-of-run summary projected from the on-disk JSONL trail by `summarizeRun`
+	 * (rpiv-workflow) — the lane-console renders it via `renderRecap` for a terminal
+	 * lane that carries one. Written by `setRecap` at `onWorkflowEnd` — see it for
+	 * the single-writer invariant. Undefined for a run that never reached
+	 * `onWorkflowEnd` (in-progress / hard-teardown) and cleared on resume
+	 * (`recordRun` reactivation) so a resumed run never leaks the prior recap —
+	 * mirroring `lastArtifact`.
+	 */
+	recap?: RunRecap;
 	/**
 	 * When this lane first started waiting on a deferred foreground question
 	 * — `Date.now()` stamped on the FIRST enqueue that finds the clock
@@ -283,6 +294,37 @@ function notify(): void {
 	}
 }
 
+/**
+ * The single teardown settle-and-emit epilogue shared by `recordRun` (resume
+ * reactivation), `retireRun`, `evictRun`, and `clearUnitLanes`. Ordering contract:
+ * capture each unit with a parked question BEFORE settling (the settle drains the
+ * queue that identifies it, so the index must be read first — captured units stay
+ * addressable for a `cleared` emit after notify); settle every parked resolver with
+ * `undefined` BEFORE the site mutation (a stalled child must never hang on a dangling
+ * resolver, whatever teardown follows); run the site-specific mutation (`afterSettle`);
+ * `notify()` BEFORE any `cleared` emit — notify listeners run synchronously inline, so
+ * a lane subscriber must observe the fully committed teardown, not a half-settled one;
+ * then emit `cleared` for ONLY the units that had parked input — a settle that parked
+ * nothing publishes nothing, so a fresh `recordRun` notifies without emitting. An
+ * undefined `entry` skips the settle loop entirely (the fresh-recordRun path). The
+ * unconditional queue truncation is a deliberate dead store at the sites whose queue
+ * dies with its map or lane inside `afterSettle`; `retireRun` is the one site whose
+ * units survive the settle and rely on it.
+ */
+function settleAndEmitCleared(runId: string, entry: LaneEntry | undefined, afterSettle: () => void): void {
+	const cleared: number[] = [];
+	if (entry) {
+		for (const unit of entry.units.values()) {
+			if (unit.pendingInput.length > 0) cleared.push(unit.index);
+			for (const p of unit.pendingInput) p.resolve(undefined); // never strand a child's resolver
+			unit.pendingInput.length = 0;
+		}
+	}
+	afterSettle();
+	notify();
+	for (const idx of cleared) emitQuestionResolved(runId, idx, "cleared");
+}
+
 // ---------------------------------------------------------------------------
 // Mutations — every one notifies.
 // ---------------------------------------------------------------------------
@@ -300,41 +342,31 @@ function notify(): void {
 export function recordRun(runId: string, name: string, meta?: { workflow?: string; input?: string }): void {
 	const { lanes } = state();
 	const existing = lanes.get(runId);
-	// Units with a parked question, captured BEFORE the reactivation settle clears
-	// them so each affected unit is addressable for a `cleared` emit after notify().
-	const cleared: number[] = [];
-	if (existing) {
-		existing.name = name;
-		existing.workflow = meta?.workflow ?? existing.workflow;
-		existing.input = meta?.input ?? existing.input;
-		existing.status = "running"; // reactivate a retained terminal lane (resume)
-		// Settle any queued input before clearing units — mirrors retireRun/evictRun/
-		// clearUnitLanes so a child can never hang on a dangling resolver across reactivation.
-		for (const unit of existing.units.values()) {
-			if (unit.pendingInput.length > 0) cleared.push(unit.index);
-			for (const p of unit.pendingInput) p.resolve(undefined);
+	settleAndEmitCleared(runId, existing, () => {
+		if (existing) {
+			existing.name = name;
+			existing.workflow = meta?.workflow ?? existing.workflow;
+			existing.input = meta?.input ?? existing.input;
+			existing.status = "running"; // reactivate a retained terminal lane (resume)
+			existing.units.clear(); // drop the prior run's per-unit sessions + terminal snapshots
+			existing.error = undefined; // clear the prior run's terminal failure reason
+			existing.lastArtifact = undefined; // clear the prior run's primary artifact path
+			existing.recap = undefined; // clear the prior run's end-of-run summary
+			existing.progress = undefined; // clear stale stage progress
+			existing.needsInputSince = undefined; // clear any stale needs-input clock
+		} else {
+			lanes.set(runId, {
+				runId,
+				name,
+				workflow: meta?.workflow,
+				input: meta?.input,
+				status: "running",
+				units: new Map<number, UnitLane>(),
+				stageUsage: new Map<string, LaneUsage>(),
+				progress: undefined,
+			});
 		}
-		existing.units.clear(); // drop the prior run's per-unit sessions + terminal snapshots
-		existing.error = undefined; // clear the prior run's terminal failure reason
-		existing.lastArtifact = undefined; // clear the prior run's primary artifact path
-		existing.progress = undefined; // clear stale stage progress
-		existing.needsInputSince = undefined; // clear any stale needs-input clock
-	} else {
-		lanes.set(runId, {
-			runId,
-			name,
-			workflow: meta?.workflow,
-			input: meta?.input,
-			status: "running",
-			units: new Map<number, UnitLane>(),
-			stageUsage: new Map<string, LaneUsage>(),
-			progress: undefined,
-		});
-	}
-	notify();
-	// Emit AFTER notify() — only a reactivation that settled parked questions publishes;
-	// a brand-new run has an empty `cleared` and publishes nothing.
-	for (const idx of cleared) emitQuestionResolved(runId, idx, "cleared");
+	});
 }
 
 /**
@@ -433,27 +465,37 @@ export function retireRun(
 	entry.status = status;
 	if (error !== undefined) entry.error = error; // terminal failure reason
 	if (lastArtifact !== undefined) entry.lastArtifact = lastArtifact; // primary artifact path (completed runs)
-	// Capture units with a parked question BEFORE the settle loop clears pendingInput,
-	// so each affected unit is addressable for a `cleared` emit after notify().
-	const cleared: number[] = [];
-	for (const unit of entry.units.values()) {
-		if (unit.pendingInput.length > 0) cleared.push(unit.index);
-		// Snapshot from a STILL-LIVE session if one is attached (the `x` path). In the
-		// normal detached path the host already captured per unit via
-		// `captureFinalSnapshot` and dropped the session, so `currentSession` is
-		// undefined here — DON'T re-snapshot (now per unit).
-		if (unit.currentSession) captureSnapshotInto(unit, unit.currentSession);
-		unit.currentSession = undefined; // drop the live session; KEEP finalBranch
-		// A never-ended unit reads terminal — including a pending unit that never fired
-		// onUnitStart (a fanout generation that retired before its units dispatched).
-		if (unit.status === "running" || unit.status === "pending") unit.status = "done";
-		for (const p of unit.pendingInput) p.resolve(undefined); // never strand a child's resolver
-		unit.pendingInput.length = 0;
-	}
-	entry.needsInputSince = undefined;
+	settleAndEmitCleared(runId, entry, () => {
+		for (const unit of entry.units.values()) {
+			// Snapshot from a STILL-LIVE session if one is attached (the `x` path). In the
+			// normal detached path the host already captured per unit via
+			// `captureFinalSnapshot` and dropped the session, so `currentSession` is
+			// undefined here — DON'T re-snapshot (now per unit).
+			if (unit.currentSession) captureSnapshotInto(unit, unit.currentSession);
+			unit.currentSession = undefined; // drop the live session; KEEP finalBranch
+			// A never-ended unit reads terminal — including a pending unit that never fired
+			// onUnitStart (a fanout generation that retired before its units dispatched).
+			if (unit.status === "running" || unit.status === "pending") unit.status = "done";
+		}
+		entry.needsInputSince = undefined;
+	});
+}
+
+/**
+ * Store a run's end-of-run summary — the SOLE recap writer, deliberately ungated
+ * by the lane's terminal status: the x-key `stopSelected` path (lane-console.ts)
+ * retires the lane to "aborted" while the run is still in-flight, and the recap
+ * computed at `onWorkflowEnd` must still land on that already-terminal lane
+ * (`retireRun` is a first-retire-wins no-op there and never touches `recap`).
+ * The host's hard-teardown dispose fallback (workflow-execution-host.ts), where
+ * `onWorkflowEnd` may never fire, stores no recap — such a lane reads bare
+ * "aborted". Best-effort: a missing lane is a no-op.
+ */
+export function setRecap(runId: string, recap: RunRecap): void {
+	const entry = state().lanes.get(runId);
+	if (!entry) return;
+	entry.recap = recap;
 	notify();
-	// Emit AFTER notify() — only units that HAD pending input publish a `cleared`.
-	for (const idx of cleared) emitQuestionResolved(runId, idx, "cleared");
 }
 
 /**
@@ -464,32 +506,27 @@ export function retireRun(
  * (with `currentSession` already gone), the snapshot is already in place. Best-effort:
  * a missing/evicted lane is a no-op. Does NOT notify — the paired `setCurrentSession`
  * that immediately follows in the host does.
- *
- * Capture-side fold-at-overwrite: a sequential multi-child stage parks EVERY child
- * on the SAME `SINGLE_UNIT_KEY` slot, so `captureSnapshotInto`'s `finalUsage =`
- * overwrite would evict each OUTGOING child's tokens before the stage-end
- * `foldStageUsage` can count them (losing all but the last). Fold the unit's
- * already-parked `finalUsage` (the outgoing child) into the CURRENT stage bucket
- * BEFORE the overwrite; the overwrite then EVICTS it from the slot, so
- * `foldStageUsage` cannot re-count it. Capture-time (children 1..N-1) and stage-end
- * (surviving last child N) touch disjoint sets → fold-exactly-once, no double-count.
- * Fail-soft by composition: no parked `finalUsage` (first capture / a failed
- * getUsage) skips the fold, and `addStageUsage`'s own guard drops an unset
- * stageName (pre-first-stage capture). Usage-only — `finalBranch`/`finalCwd`/
- * `finalToolDefs` stay last-writer-wins across the overwrite.
- *
- * The fold is gated on a LIVE lane (`status === "running"`): the dock's optimistic
- * `x` cancel calls `retireRun` BEFORE this teardown capture, and retire's own
- * snapshot parks the SAME still-live child's usage onto the slot — so the parked
- * value here is a same-child re-capture, not an outgoing sibling. Folding it would
- * count the child twice (once in the bucket, once via the retained unit at render).
- * Post-retirement the overwrite-only path is exactly right.
  */
 export function captureFinalSnapshot(runId: string, index: number, session: LaneSession): void {
 	const entry = state().lanes.get(runId);
 	if (!entry) return;
 	const unit = upsertUnit(entry, index);
+	// The fold is gated on a LIVE lane (`status === "running"`): the dock's optimistic
+	// `x` cancel calls `retireRun` BEFORE this teardown capture, and retire's own snapshot
+	// parks the SAME still-live child's usage onto the slot — so the parked value here is a
+	// same-child re-capture, not an outgoing sibling. Folding here would double-count (once
+	// in the bucket, once via the retained unit at render). Post-retirement the overwrite-only
+	// path is exactly right.
 	if (unit.finalUsage && entry.status === "running") {
+		// Fold-at-overwrite: a sequential multi-child stage parks EVERY child on the SAME
+		// `SINGLE_UNIT_KEY` slot, so `captureSnapshotInto`'s `finalUsage =` overwrite would
+		// evict each OUTGOING child's tokens before the stage-end `foldStageUsage` can count
+		// them (losing all but the last). Fold the unit's already-parked `finalUsage` (the
+		// outgoing child) into the CURRENT stage bucket via `addStageUsage` BEFORE the
+		// overwrite; the overwrite then EVICTS it from the slot, so `foldStageUsage` cannot
+		// re-count it. Capture-time (children 1..N-1) and stage-end (surviving last child N)
+		// touch disjoint sets → fold-exactly-once, no double-count. Usage-only —
+		// `finalBranch`/`finalCwd`/`finalToolDefs` stay last-writer-wins across the overwrite.
 		addStageUsage(runId, entry.progress?.stageName, unit.finalUsage);
 	}
 	captureSnapshotInto(unit, session);
@@ -515,17 +552,9 @@ export function evictRun(runId: string): void {
 	const { lanes } = state();
 	const entry = lanes.get(runId);
 	if (!entry) return;
-	// Capture units with a parked question BEFORE the settle, so each affected unit is
-	// addressable for a `cleared` emit after notify().
-	const cleared: number[] = [];
-	for (const unit of entry.units.values()) {
-		if (unit.pendingInput.length > 0) cleared.push(unit.index);
-		for (const p of unit.pendingInput) p.resolve(undefined);
-	}
-	lanes.delete(runId);
-	notify();
-	// Emit AFTER notify() — only units that HAD pending input publish a `cleared`.
-	for (const idx of cleared) emitQuestionResolved(runId, idx, "cleared");
+	settleAndEmitCleared(runId, entry, () => {
+		lanes.delete(runId);
+	});
 }
 
 /** Update a lane's status (best-effort — a missing lane is a no-op). */
@@ -601,18 +630,10 @@ export function sweepRunningUnits(runId: string, status: "done" | "failed"): voi
 export function clearUnitLanes(runId: string): void {
 	const entry = state().lanes.get(runId);
 	if (!entry || entry.units.size === 0) return;
-	// Capture units with a parked question BEFORE the settle, so each affected unit is
-	// addressable for a `cleared` emit after notify().
-	const cleared: number[] = [];
-	for (const unit of entry.units.values()) {
-		if (unit.pendingInput.length > 0) cleared.push(unit.index);
-		for (const p of unit.pendingInput) p.resolve(undefined);
-	}
-	entry.units.clear();
-	entry.needsInputSince = undefined;
-	notify();
-	// Emit AFTER notify() — only units that HAD pending input publish a `cleared`.
-	for (const idx of cleared) emitQuestionResolved(runId, idx, "cleared");
+	settleAndEmitCleared(runId, entry, () => {
+		entry.units.clear();
+		entry.needsInputSince = undefined;
+	});
 }
 
 /** Pairwise-accumulate one stage's usage into the `stageUsage` bucket for `runId` +
@@ -675,11 +696,14 @@ export function setLaneProgress(runId: string, progress: LaneProgress | undefine
 /** Enqueue a deferred foreground-stage UI request onto a UNIT's queue (relay).
  *  Stamps the LANE-level needs-input clock on the FIRST enqueue across the
  *  lane that finds it unset (held across a transient drain→refill so the aging
- *  heading never resets mid-wait). A missing run settles immediately so the child
- *  never hangs. */
+ *  heading never resets mid-wait). A missing run — or a retired (non-"running")
+ *  lane — settles immediately so the child never hangs: the x-key abort races
+ *  the child's relay park, and a park landing AFTER retireRun's settle pass
+ *  would strand forever (first-retire-wins means no later settle runs), pinning
+ *  the needs-input clock and the warp Blocked badge until manual evict/answer. */
 export function enqueueInput(runId: string, index: number, pending: PendingInput): void {
 	const entry = state().lanes.get(runId);
-	if (!entry) {
+	if (entry?.status !== "running") {
 		pending.resolve(undefined);
 		return;
 	}
@@ -687,7 +711,7 @@ export function enqueueInput(runId: string, index: number, pending: PendingInput
 	upsertUnit(entry, index).pendingInput.push(pending);
 	notify();
 	// Emit AFTER notify() so a lifecycle subscriber observes the committed park. The
-	// missing-run early-return above emits nothing (no question was ever parked).
+	// settle-immediately early-return above emits nothing (no question was ever parked).
 	emitQuestionAsked(runId, index, entry.name, entry.workflow, entry.input);
 }
 

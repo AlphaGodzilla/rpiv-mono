@@ -1,3 +1,33 @@
+## [2.10.0] - 2026-09-12
+
+## [2.9.0] - 2026-09-01
+
+## [2.8.0] - 2026-08-29
+
+## [2.7.1] - 2026-08-24
+
+## [2.7.0] - 2026-08-21
+
+## [2.6.4] - 2026-08-20
+
+## [2.6.3] - 2026-08-20
+
+## [2.6.2] - 2026-08-18
+
+## [2.6.1] - 2026-08-17
+
+### Added
+
+- `GuidanceFields` (interface, `GuidanceFieldsSchema`, `validateGuidanceFields`) now supports an optional `description` field — kept when it is a non-empty string, dropped otherwise. Consumers that read `validateGuidanceFields` output and ignore the field are unaffected; consumers that compose `GuidanceFieldsSchema` into a `Value.Check`-validated config now reject a *wrong-typed* `description` (previously tolerated as an unknown key), so such consumers should degrade per field rather than per file.
+
+## [2.6.0] - 2026-08-15
+
+## [2.5.2] - 2026-08-14
+
+## [2.5.1] - 2026-08-14
+
+## [2.5.0] - 2026-08-13
+
 ## [2.4.0] - 2026-08-03
 
 ## [2.3.1] - 2026-07-31

@@ -1,6 +1,6 @@
 # Workflows and recipes
 
-The three `/wf` pipelines `@juicesharp/rpiv-pi` contributes, and the hand-driven
+The four `/wf` pipelines `@juicesharp/rpiv-pi` contributes, and the hand-driven
 skill chains to reach for when you don't want a whole pipeline.
 
 `/wf` itself ships with [`@juicesharp/rpiv-workflow`](https://www.npmjs.com/package/@juicesharp/rpiv-workflow),
@@ -19,7 +19,7 @@ session start; if the runner is not installed, the built-ins simply do not appea
 A run appears as a lane in the dock under your editor. You keep typing in the main
 session while it works — see [lanes.md](./lanes.md).
 
-## The three built-in workflows
+## The four built-in workflows
 
 ### `vet`
 
@@ -37,13 +37,19 @@ each phase's plan must build on the ones before it.
 
 ### `build`
 
-`goal → research → slice → slice gate (+ fix loop) → design-slice (parallel fanout) → design-review → synthesize → plan gate → elaborate (parallel fanout) → re-grade → implement → validate → commit`
+`goal → research → acceptance → slice → slice gate (+ fix loop) → design-slice (parallel fanout) → design-review → synthesize → plan gate → elaborate (parallel fanout) → re-grade → implement → validate → commit`
 
 Your brief, sliced. It captures your brief verbatim as a goal artifact — the north star the
 quality gates and `validate` anchor against — then decomposes the work into vertical
 slices, designs each in parallel, takes one consolidated developer checkpoint on the
 proposed interfaces, synthesizes hierarchically, and grades the plan before and after
 code is elaborated into it. Three automated gates plus one human checkpoint.
+
+### `ship`
+
+`goal → research → acceptance → plan → plan-cite-check → grade → implement → implement-scope-check → reconcile → validate → (validate-fix, once) | commit`
+
+Ship a small, well-understood task in one lightweight forward pass. The verbatim brief is the goal artifact; a trimmed research stage sized to the brief's pre-chewedness (none or one verify-only `codebase-analyzer` dispatch when the brief names the root cause, files, or fix; at most two targeted dispatches otherwise — never a full `/skill:research` pass) grounds it; an `acceptance` stage then derives the executable standard of completion from the goal — ID'd observable outcomes with runnable evidence commands, frozen BEFORE planning so the standard cannot inherit the plan's scope (research grounds only the evidence, never the item set). A single unsliced plan from `quick-plan` receives the verbatim goal and the inventory alongside the research doc, records a per-item disposition (`implemented` naming the phase, or `deferred` with a reason), and must explicitly defer any goal ask it narrows out; a deterministic citation floor and one tier-independent three-dimension grade (correctness, completeness, architecture-fit — architecture-fit cannot be dropped from a light roster) gate the plan before `implement`. The citation floor stops the run only on a phase body edit missing from its `files:` declaration (an undeclared write corrupts implement's dependency derivation); every citation-resolution finding — unresolved path, ambiguity, line drift — is advisory (recorded on the verdict, severity `low`) and rides to the grade panel, whose correctness unit receives the floor's verdict as `--cite-check` and adjudicates each finding by symbol instead of the run dying over a resolver limitation. Every gate is stop-on-fail — no confirm panels, snapshots, or code-elaboration lane — and a red gate surfaces as `stopped at <gate>: <reason>` in the end-of-run toast and lane recap (never a ✓); hand-repair, then resume with `/wf @<run-id>` to re-run the halted gate against the repaired tree, reusing every upstream artifact. A goal-anchored `validate` judges the landing before `commit` — and EXECUTES the acceptance inventory's evidence commands against the finished tree (a failing item forces `verdict: fail` and lands as a structured, remediable blocker) — with the preset's one sanctioned repair arm: a validate `fail` carrying structured remediable handles (a `pass: false` risk ruling or a `blockers:` entry) buys ONE bounded `remediate` hop — re-verified end-to-end through the scope floor and reconcile — before any remaining fail halts; a prose-only fail halts immediately. Best for tasks small enough to plan in one pass; prefer `build` for anything needing decomposition.
 
 ## Review loops
 

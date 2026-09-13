@@ -1,6 +1,6 @@
 {
 	"name": "@juicesharp/rpiv-ask-user-question",
-	"version": "2.4.0",
+	"version": "2.10.0",
 	"description": "Pi extension. A structured questionnaire the model can put to you when it would otherwise guess, with typed options instead of free-form replies.",
 	"keywords": [
 		"pi-package",
@@ -43,14 +43,6 @@
 		"!docs/*.jpg",
 		"!docs/*.svg",
 		"README.md",
-		"remote/ask-prd-state.ts",
-		"remote/channel-transport.ts",
-		"remote/tg-message.ts",
-		"remote/tg-questionnaire.ts",
-		"remote/message-format.ts",
-		"remote/rpiv-command.ts",
-		"remote/remote-config.ts",
-		"remote/remote-questionnaire.ts",
 		"state/build-questionnaire.ts",
 		"state/external-editor.ts",
 		"state/i18n-bridge.ts",
@@ -64,6 +56,7 @@
 		"state/state-reducer.ts",
 		"state/state.ts",
 		"tool/format-answer.ts",
+		"tool/normalize-params.ts",
 		"tool/response-envelope.ts",
 		"tool/types.ts",
 		"tool/validate-questionnaire.ts",
@@ -86,6 +79,7 @@
 		"view/tab-content-strategy.ts"
 	],
 	"pi": {
+		"image": "https://raw.githubusercontent.com/juicesharp/rpiv-mono/main/packages/rpiv-ask-user-question/docs/cover.png",
 		"extensions": [
 			"./index.ts"
 		]

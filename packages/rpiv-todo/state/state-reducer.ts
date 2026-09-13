@@ -65,15 +65,13 @@ function taskChanged(before: Task, after: Task): boolean {
 }
 
 /**
- * Pure reducer: (state, action, params) → (state, op). Mirrors the
- * `applyTaskMutation` of pre-refactor `todo.ts` minus content/details
- * formatting; the response envelope (`tool/response-envelope.ts`) owns
+ * Pure reducer: (state, action, params) → (state, op). The response envelope (`tool/response-envelope.ts`) owns
  * formatting, the store (`state/store.ts`) owns commit.
  *
  * Validation is in-line: structural guards (`subject required`, `id required`,
  * `at least one mutable field`) plus state-aware checks (transition legality,
  * dangling/deleted blockedBy, self-block, cycles). Decision: validation stays
- * in-reducer — see Plan §Decisions §Decision 2.
+ * in-reducer.
  */
 export function applyTaskMutation(state: TaskState, action: TaskAction, params: TaskMutationParams): ApplyResult {
 	switch (action) {

@@ -216,14 +216,16 @@ describe("bundled skill contracts", () => {
 	// dropped, or fails to parse (a malformed block is silently skipped).
 	const declared = new Map(buildSkillContractsFromFrontmatter(BUNDLED_SKILLS_DIR));
 
-	it("declares a contract for the 28 pipeline + orthogonal skills", () => {
-		expect(declared.size).toBe(28);
+	it("declares a contract for the 30 pipeline + orthogonal skills", () => {
+		expect(declared.size).toBe(30);
 		for (const name of [
 			"discover",
 			"research",
+			"acceptance",
 			"explore",
 			"design",
 			"plan",
+			"quick-plan",
 			"blueprint",
 			"architecture-review",
 			"code-review",
@@ -268,17 +270,45 @@ describe("bundled skill contracts", () => {
 		expect(data?.properties?.phases).toBeDefined();
 	});
 
+	it("validate declares blockers as an optional array whose items require command + file", () => {
+		// The structured remediation handles the validate gate routes on and the
+		// scope floor's validate-report acceptance credits: optional (a pass or a
+		// fail covered by risk rulings omits it), but an entry that IS emitted must
+		// carry a runnable command + an attributable file for the acceptance to
+		// read (id/line are optional provenance).
+		const data = declared.get("validate")?.produces?.data as
+			| {
+					required?: string[];
+					properties?: {
+						blockers?: {
+							type?: string;
+							items?: { required?: string[]; properties?: Record<string, { type?: string }> };
+						};
+					};
+			  }
+			| undefined;
+		expect(data?.required).not.toContain("blockers");
+		const blockers = data?.properties?.blockers;
+		expect(blockers?.type).toBe("array");
+		expect(blockers?.items?.required).toEqual(["command", "file"]);
+		expect(blockers?.items?.properties?.id?.type).toBe("string");
+		expect(blockers?.items?.properties?.command?.type).toBe("string");
+		expect(blockers?.items?.properties?.file?.type).toBe("string");
+		expect(blockers?.items?.properties?.line?.type).toBe("number");
+	});
+
 	it("documents the declared-but-not-harvested orthogonal set", () => {
 		// These skills declare a contract but don't appear in any dispatched
-		// built-in workflow stage. The three built-ins (build/polish/vet) never
-		// dispatch the pipeline-stage skills — discover/explore/research/design/
-		// plan/frontend-design are gated to explicit `/skill:` invocation and run
-		// as prompt-driven stages (e.g. `research: produces({ prompt: ... })`) or
-		// under a different skill (elaborate, synthesize, design-slice), so all
-		// six stay unharvested here. research/design/plan were previously
-		// harvested only by arch's bare `produces()` stages; with ship/arch gone
-		// they rejoin the unharvested set. Two more lost their only harvester when
-		// their workflows were removed:
+		// built-in workflow stage. The four built-ins (build/polish/vet/ship)
+		// never dispatch the pipeline-stage skills — discover/explore/research/
+		// design/plan/frontend-design are gated to explicit `/skill:` invocation
+		// and run as prompt-driven stages (e.g. `research: produces({ prompt: ... })`)
+		// or under a different skill (elaborate, synthesize, design-slice), so all
+		// six stay unharvested here — ship's research/validate run as prompt stages
+		// (harvest-skipped) while its `plan` dispatches quick-plan (harvested, so
+		// quick-plan is NOT on this list) and its `grade` reuses the already-harvested
+		// grade skill. Two more lost their only harvester when their workflows were
+		// removed:
 		//   - revise: was harvested only by the removed old-build graph's
 		//     `revise` stage; no restored workflow re-introduces it;
 		//   - pr-triage: was harvested only by the removed pr-triage workflow.
@@ -313,7 +343,7 @@ describe("bundled skill contracts", () => {
 		);
 	});
 
-	it("every declared kind matches the harvested kind for the three built-in workflows", () => {
+	it("every declared kind matches the harvested kind for the four built-in workflows", () => {
 		// Harvest derives each dispatched skill's kind from how the built-ins use
 		// it (produces() → "produces", acts() → "side-effect"). A declared kind
 		// that disagrees would make the rendered graph lie — catch it here.

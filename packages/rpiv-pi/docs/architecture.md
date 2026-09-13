@@ -9,7 +9,7 @@ extending the package.
 ```
 rpiv-pi/
 ├── extensions/rpiv-core/   the one extension: hooks, commands, lanes, guidance, model config
-├── skills/                 27 contract-carrying skills, one directory each
+├── skills/                 30 contract-carrying skills, one directory each
 ├── agents/                 15 subagent profiles, copied to ~/.pi/agent/agents/ at runtime
 └── scripts/                deterministic helpers skills shell out to (Node built-ins only)
 ```
@@ -39,7 +39,7 @@ the siblings contribute capability.
 | `/rpiv-models` | always | Interactive only |
 | `/lanes` | always | No-ops with a notice when nothing is running |
 | `ctrl+q` | conditionally | Skipped entirely when `RPIV_LANES_HOTKEY` disables it |
-| `/skill:<name>` × 27 | Pi, from the manifest | |
+| `/skill:<name>` × 30 | Pi, from the manifest | |
 | `--rpiv-debug` flag | always | Reveals the hidden injected messages below |
 
 Session events subscribed: `session_start`, `session_compact`, `session_shutdown`,
@@ -66,13 +66,21 @@ handles the working directory, but it still checks
 
 Delivery is a hidden message with `customType: "rpiv-guidance"`. An in-process set
 deduplicates it, cleared on `session_start`, `session_compact`, and `session_shutdown`.
-Run `pi --rpiv-debug` to see the messages as they are sent.
+A compaction hook never sends context directly: sending while overflow recovery is active
+creates steering queue items. Instead, the compacted session is marked by identity and
+root guidance is merged with the pipeline pointer and a forced-fresh Git read in one hidden
+`before_agent_start` message on that session's next real user turn. The per-session marker
+and forced reads prevent concurrent detached sessions from consuming its restoration. Overflow retry itself
+resumes from the compaction summary without a synthetic last message. Run
+`pi --rpiv-debug` to see the messages as they are sent.
 
 ## Git context injection
 
-Branch, short commit, and user are injected at `session_start`, re-injected after
-`session_compact`, and on `before_agent_start` only when they changed — a git-mutating
-bash command invalidates the cache. `customType: "rpiv-git-context"`, also revealed by
+Branch, short commit, and user are injected at `session_start`; after
+`session_compact` they join the one deferred next-user-turn context message; otherwise
+`before_agent_start` injects them only when they changed — a git-mutating bash command
+invalidates the cache. Standalone messages use `customType: "rpiv-git-context"`; the
+merged recovery message uses `"rpiv-post-compact-context"`. Both are revealed by
 `--rpiv-debug`.
 
 Git is optional. If the `git` calls fail, the injection is skipped and nothing else
@@ -80,10 +88,11 @@ changes. When `git config user.name` is empty, `$USER` is used, then `unknown`.
 
 ## Pipeline pointer
 
-18 of the 27 skills set `disable-model-invocation: true`, which hides them from the
+21 of the 30 skills set `disable-model-invocation: true`, which hides them from the
 model's skill list so it cannot wander into a design pass mid-conversation. To keep them
-discoverable, a roughly 120-token stage index is injected at `session_start` — hidden
-by default, visible under `--rpiv-debug`.
+discoverable, a roughly 120-token stage index is injected at `session_start` and folded
+into the first real user turn after compaction — hidden by default, visible under
+`--rpiv-debug`.
 
 ## Sibling coupling
 

@@ -562,6 +562,32 @@ describe("ask_user_question — multi-question tab cycling flow", () => {
 		expect(r?.details.answers[0].question).toBe("Q1?");
 	});
 
+	// Global note on the Submit tab: TAB to Submit, `n` opens the shared editor, the
+	// committed note rides the result as details.globalNote and the envelope gains a
+	// `global note:` segment — a note alone turns a zero-answer submit into an answered
+	// result rather than the decline.
+	it("TAB → Submit, n + note + Enter commits, Enter submits → details.globalNote set + 'global note:' in envelope", async () => {
+		const tool = register();
+		const { custom } = driveCustom((c) => {
+			c.handleInput(KEY.TAB); // Q1 → Q2
+			c.handleInput(KEY.TAB); // Q2 → Submit
+			c.handleInput("n"); // Submit tab: open the global-note editor
+			c.handleInput("s");
+			c.handleInput("h");
+			c.handleInput("i");
+			c.handleInput("p"); // type "ship"
+			c.handleInput(KEY.ENTER); // commit the note (notes_exit → notesByTab[questions.length])
+			c.handleInput(KEY.ENTER); // Submit row (default index 0) → submit
+		});
+		const ctx = { hasUI: true, ui: { custom } } as never;
+		const r = (await tool.execute?.("tc", twoParams as never, undefined as never, undefined as never, ctx)) as
+			| ToolResult
+			| undefined;
+		expect(r?.details.cancelled).toBe(false);
+		expect(r?.details.globalNote).toBe("ship");
+		expect(r?.content[0].text).toContain("global note:");
+	});
+
 	it("answer all → Submit tab → DOWN → Enter on Cancel returns cancelled=true with all answers preserved", async () => {
 		const tool = register();
 		const { custom } = driveCustom((c) => {
@@ -719,7 +745,7 @@ describe("ask_user_question — MAX_QUESTIONS (4 questions) complete flow", () =
 		expect(r?.details.answers).toHaveLength(4);
 		const labels = r?.details.answers.map((a: QuestionAnswer) => a.answer);
 		expect(labels).toEqual(["A", "B", "C", "D"]);
-		// Phase 3 envelope: single CC-style sentence chain.
+		// Envelope: single CC-style sentence chain.
 		expect(r?.content[0].text).toContain('"Q1?"="A".');
 		expect(r?.content[0].text).toContain('"Q4?"="D".');
 		expect(r?.content[0].text).toMatch(/^User has answered your questions:/);
@@ -961,6 +987,80 @@ describe("ask_user_question — bracketed paste + Kitty CSI-u (dictation parity)
 			| undefined;
 		expect(r?.details.answers[0].kind).toBe("custom");
 		expect(r?.details.answers[0].answer).toBe("Hello world");
+	});
+
+	it("large bracketed paste (>10 lines) commits the expanded content, not the compact marker", async () => {
+		// Pi-tui's Editor stashes pastes over 10 lines / 1000 chars in a private map and
+		// inserts a "[paste #N +L lines]" marker. Submitting must expand the marker back
+		// to the stored body — pi core submits main-prompt input the same way.
+		const bigPaste = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+		const tool = register();
+		const { custom } = driveCustom((c) => {
+			c.handleInput(KEY.DOWN);
+			c.handleInput(KEY.DOWN); // inputMode on "Type something."
+			c.handleInput(`\x1b[200~${bigPaste}\x1b[201~`);
+			c.handleInput(KEY.ENTER);
+		});
+		const ctx = { hasUI: true, ui: { custom } } as never;
+		const r = (await tool.execute?.("tc", freeTextParams as never, undefined as never, undefined as never, ctx)) as
+			| ToolResult
+			| undefined;
+		expect(r?.details.cancelled).toBe(false);
+		expect(r?.details.answers[0].kind).toBe("custom");
+		expect(r?.details.answers[0].answer).toBe(bigPaste);
+		expect(r?.details.answers[0].answer).not.toContain("[paste #");
+	});
+
+	it("large bracketed paste into notes lands the expanded text in answer.notes", async () => {
+		const bigNotes = Array.from({ length: 12 }, (_, i) => `note ${i + 1}`).join("\n");
+		const tool = register();
+		const { custom } = driveCustom((c) => {
+			c.handleInput("n"); // universal notes gate (focus starts on Default)
+			c.handleInput(`\x1b[200~${bigNotes}\x1b[201~`);
+			c.handleInput(KEY.ESC); // exit notes → commits to notesByTab
+			c.handleInput(KEY.ENTER); // confirm Default with the note
+		});
+		const ctx = { hasUI: true, ui: { custom } } as never;
+		const r = (await tool.execute?.("tc", freeTextParams as never, undefined as never, undefined as never, ctx)) as
+			| ToolResult
+			| undefined;
+		expect(r?.details.answers[0].answer).toBe("Default");
+		expect(r?.details.answers[0].notes).toBe(bigNotes);
+	});
+
+	it("large paste survives a tab-switch draft round-trip (restores go through setText)", async () => {
+		// Drafts restore via Editor.setText, which clears the backing paste map —
+		// so the draft must already be expanded when captured.
+		const twoQuestionParams = {
+			questions: [
+				{ question: "Q1?", header: "First", options: [{ label: "A" }, { label: "B" }] },
+				{ question: "Q2?", header: "Second", options: [{ label: "X" }, { label: "Y" }] },
+			],
+		};
+		const bigPaste = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+		const tool = register();
+		const { custom } = driveCustom((c) => {
+			c.handleInput(KEY.DOWN);
+			c.handleInput(KEY.DOWN); // Q1 "Type something." row → inputMode
+			c.handleInput(`\x1b[200~${bigPaste}\x1b[201~`);
+			c.handleInput(KEY.DOWN); // wrap to A — nav saves the (expanded) draft
+			c.handleInput(KEY.TAB); // → Q2
+			c.handleInput(KEY.SHIFT_TAB); // ← Q1 (draft restored via setText)
+			c.handleInput(KEY.DOWN);
+			c.handleInput(KEY.DOWN); // back on "Type something.", draft re-restored
+			c.handleInput(KEY.ENTER); // commit custom → auto-advance to Q2
+			c.handleInput(KEY.TAB); // → Submit
+			c.handleInput(KEY.ENTER); // submit
+		});
+		const ctx = { hasUI: true, ui: { custom } } as never;
+		const r = (await tool.execute?.("tc", twoQuestionParams as never, undefined as never, undefined as never, ctx)) as
+			| ToolResult
+			| undefined;
+		expect(r?.details.cancelled).toBe(false);
+		const q1 = r?.details.answers.find((a) => a.questionIndex === 0);
+		expect(q1?.kind).toBe("custom");
+		expect(q1?.answer).toBe(bigPaste);
+		expect(q1?.answer).not.toContain("[paste #");
 	});
 });
 

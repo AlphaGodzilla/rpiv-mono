@@ -128,6 +128,7 @@ function makeConfig(over: MakeConfigOverrides = {}): DialogParts {
 				return (previewPane as unknown as Component).render(w).length;
 			}),
 		getTerminalRows: over.getTerminalRows ?? (() => 24),
+		collapseKey: over.collapseKey ?? "ctrl+]",
 	};
 	const initialProps: DialogProps = over.initialProps ?? { state, activePreviewPane: previewPane };
 	return { config, initialProps };
@@ -267,6 +268,23 @@ describe("makeDialog — multi-question (question tab)", () => {
 		);
 		const joined = dlg.render(80).join("\n");
 		expect(joined).toContain(HINT_PART_NOTES);
+	});
+
+	it("footer hint names the configured collapseKey instead of the default (#176)", () => {
+		const joined = makeDialog(makeConfig({ collapseKey: "alt+o" }))
+			.render(160)
+			.join("\n");
+		expect(joined).toContain("Alt+O to collapse");
+		expect(joined).not.toContain("Ctrl+]");
+	});
+
+	it("footer hint drops the collapse part when collapseKey is 'off' (#176)", () => {
+		const joined = makeDialog(makeConfig({ collapseKey: "off" }))
+			.render(160)
+			.join("\n");
+		expect(joined).not.toContain("to collapse");
+		expect(joined).toContain(HINT_PART_ENTER);
+		expect(joined).toContain("Esc to cancel");
 	});
 
 	it("shows multiline controls at the right and drops notes while inputMode captures text", () => {
@@ -677,7 +695,7 @@ describe("makeDialog — body residual padding", () => {
 		const multiSelectByTab: ReadonlyArray<MultiSelectView | undefined> = [undefined, mso];
 		const getBodyHeight = (w: number) => Math.max(1, (mso as unknown as Component).render(w).length);
 
-		// Phase 2 adds a "Type something." row to multi-select tabs (+1 to MultiSelectView
+		// The "Type something." row on multi-select tabs adds (+1 to MultiSelectView
 		// height), pushing this 5-option multi tab's body from 11 → 12 and the full dialog past
 		// the prior 24-row default into the overflow regime (which disables the residual spacer
 		// that equalizes cross-tab height). Give the dialog enough rows that both tabs render

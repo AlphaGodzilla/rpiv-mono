@@ -5,6 +5,66 @@ All notable changes to `@juicesharp/rpiv-ask-user-question` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-09-12
+
+### Fixed
+
+- Bare carriage returns in model-supplied text (`question`, `header`, `options[].label`, `options[].description`, `options[].preview`) no longer fragment option rows or corrupt the terminal line: line terminators are normalized once at tool entry — `\r\n` becomes `\n`, a lone `\r` is deleted (never a space, never a newline) — before validation, the TUI, the RPC dialog walker, the answer envelope, and the `rpiv:ask-user:prompt` payload see the text (#192). As a consequence, labels that differed from a reserved or duplicate label only by a stray `\r` are now rejected as before the CR slipped in.
+
+## [2.9.0] - 2026-09-01
+
+## [2.8.0] - 2026-08-29
+
+## [2.7.1] - 2026-08-24
+
+## [2.7.0] - 2026-08-21
+
+### Added
+
+- Press `n` on the Submit tab to attach a global note to the whole questionnaire (#182). The note reaches the model as a trailing `global note: <text>` envelope segment and as `details.globalNote`, survives tab switches, and never marks a question answered; the Submit tab advertises it in the bottom key-hint row (below the picker, matching the question tabs' hint idiom) and shows the committed note as a `Note` entry in the review list.
+- A global note counts as an answer: submitting with every question blank but a non-empty global note returns the answered envelope instead of the decline. A cancelled result keeps its note in `details.globalNote` while the `content` text stays the canonical decline message.
+- Notes — per-question `n` and the Submit-tab global note — are documented as terminal-only: the native `select`/`input` dialogs of RPC/ACP hosts carry no note field.
+
+## [2.6.4] - 2026-08-20
+
+## [2.6.3] - 2026-08-20
+
+### Fixed
+
+- The dialog footer hint now names the configured `collapseKey` (e.g. `Alt+O to collapse`) instead of always reading `Ctrl+]`, and is omitted entirely when `collapseKey` is `"off"` — previously the dialog advertised a shortcut that could not fire (#176).
+- The collapsed one-line footer (`… to expand`) and the one-shot hide notification use the same display casing as the footer hint (`Ctrl+]`, `Alt+O`), instead of the raw lowercase config spec.
+- Compound named keys display conventionally in hints (`Ctrl+PageDown`, not `Ctrl+Pagedown`).
+- Collapsing no longer hides the overlay on hosts that expose an overlay handle but no raw terminal input — hiding would be irreversible there (pi-tui routes no input to a hidden overlay), so the dialog now falls back to the visible one-line collapsed row, which the same key expands.
+
+## [2.6.2] - 2026-08-18
+
+## [2.6.1] - 2026-08-17
+
+### Added
+
+- New `guidance.description` config field: a non-empty string in `$XDG_CONFIG_HOME/rpiv-ask-user-question/config.json` now replaces the entire built-in `ask_user_question` tool description (no merging); empty or non-string values keep the default. Note: a `description` key that previously sat unused under `guidance` now takes effect.
+- Package card cover on pi.dev: `package.json` now declares `pi.image` pointing at the package's `docs/cover.png`.
+
+## [2.6.0] - 2026-08-15
+
+### Added
+
+- The questionnaire emits one standard terminal BEL (`\x07`) when it starts waiting for input in an interactive TTY — terminal configuration decides whether that is an audible alert, a visual alert, or nothing. Redirected and non-TTY output (including RPC pipes) is untouched (#140).
+
+## [2.5.2] - 2026-08-14
+
+### Fixed
+
+- The questionnaire now honors a remapped `tui.input.submit` key as its confirm action everywhere (notes, custom answers, option rows, multi-select, Submit tab). Previously a Slack-style configuration that folds `enter` into `tui.input.newLine` and moves submit elsewhere (e.g. `ctrl+enter`) left the dialog with no working confirm key, and pressing the submit key silently wiped the typed draft (#156).
+
+## [2.5.1] - 2026-08-14
+
+### Fixed
+
+- Long pasted text in "Type something" answers and notes now reaches the agent as the full pasted content instead of the editor's compact `[paste #N +L lines]` marker, including after tab switches (#160).
+
+## [2.5.0] - 2026-08-13
+
 ## [2.4.0] - 2026-08-03
 
 ### Fixed

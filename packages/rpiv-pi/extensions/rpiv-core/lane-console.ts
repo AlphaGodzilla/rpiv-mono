@@ -47,8 +47,10 @@ import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-wo
 import { type Component, Key, matchesKey, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	computeLaneLayout,
+	FALLBACK_ROWS,
 	renderLaneList,
 	renderLiveOutputBorder,
+	renderRecap,
 	renderStageBreakdown,
 	SPIN_INTERVAL_MS,
 	SPINNER_FRAMES,
@@ -71,7 +73,13 @@ import {
 	unitNeedsInput,
 } from "./run-lane-registry.js";
 
+/** The console renders IN-FLOW, so 0.9 leaves the bottom ~10% of the terminal for the primary
+ *  footer that keeps rendering below it (a full-screen ratio would push the footer off-screen). */
 const MAX_HEIGHT_RATIO = 0.9;
+/** Floor on the rendered surface height: the 0.9 ratio of a tiny or unreported terminal would
+ *  collapse the surface below the chrome it must always show (live-output border + a minimal
+ *  transcript band + the lane block). */
+const MIN_SURFACE_ROWS = 8;
 /** The PageUp/PageDown transcript-scroll page size. (The armed band reclaims the full surface
  *  up to `maxRows − chrome`, so this no longer floors the transcript region.) */
 const TRANSCRIPT_MIN = 4;
@@ -141,7 +149,7 @@ export class LaneConsole implements Component {
 	 *  PageDown walks it; retarget clears it). Decoupled from body.length → no drift. */
 	private anchorLine = 0;
 	/** max(0, body.length - rows) cached every windowTranscript() frame; scroll() reads it
-	 *  because it has no body/rows in scope (r1: may lag the latest token by one frame —
+	 *  because it has no body/rows in scope (may lag the latest token by one frame —
 	 *  self-corrects on the next render, never produces a negative start or a height change). */
 	private lastMaxStart = 0;
 	/** `t` toggles tool/summary expansion in the transcript. */
@@ -323,8 +331,8 @@ export class LaneConsole implements Component {
 	// ---------------------------------------------------------------------------
 
 	render(width: number): string[] {
-		const realRows = (this.tui.terminal as { rows?: number }).rows ?? 24;
-		const maxRows = Math.max(8, Math.floor(realRows * MAX_HEIGHT_RATIO));
+		const realRows = (this.tui.terminal as { rows?: number }).rows ?? FALLBACK_ROWS;
+		const maxRows = Math.max(MIN_SURFACE_ROWS, Math.floor(realRows * MAX_HEIGHT_RATIO));
 		const rows = listLanesForDisplay();
 		// Defensive clamp — the row set can shrink between a sync() and this render().
 		const selection = rows.length > 0 ? Math.min(this.selection, rows.length - 1) : 0;
@@ -336,11 +344,18 @@ export class LaneConsole implements Component {
 		// — this is what keeps the lane view static across the step-in.
 		const { laneCap } = computeLaneLayout(realRows);
 		const laneList = renderLaneList(this.theme, width, { active: true, selection, frame: this.frame, laneCap });
+		// Recap summary (auto-shows — no toggle): ONE trail-derived end-of-run line for the
+		// selected lane (newest artifact · +N more · ⚠ reason). Empty when the lane is missing,
+		// carries no recap (a running / reactivated lane renders byte-identical), or the recap
+		// adds nothing beyond the lane chip. Spliced AFTER the lane list and BEFORE the optional
+		// stage block; ≤1 line, absorbed by the transcript flex region.
+		const recapBlock = target ? renderRecap(this.theme, width, target.runId) : [];
 		const stageBlock =
 			target && this.stageBreakdownExpanded ? renderStageBreakdown(this.theme, width, target.runId) : [];
 		const rule = this.theme.fg("accent", "─".repeat(Math.max(0, width)));
 		const laneBlock = [
 			...laneList,
+			...(recapBlock.length ? ["", ...recapBlock] : []),
 			...(stageBlock.length ? ["", ...stageBlock] : []),
 			"",
 			this.footer(width, target),

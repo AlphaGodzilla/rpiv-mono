@@ -70,6 +70,7 @@ interface SessionTestOptions {
 	params?: QuestionParams;
 	itemsByTab?: WrappingSelectItem[][];
 	editInput?: (value: string) => Promise<string | undefined>;
+	keybindings?: typeof keybindings;
 }
 
 function makeSession(options: SessionTestOptions = {}) {
@@ -81,9 +82,10 @@ function makeSession(options: SessionTestOptions = {}) {
 		params: sessionParams,
 		itemsByTab: options.itemsByTab ?? itemsFor(sessionParams),
 		done,
-		keybindings,
+		keybindings: options.keybindings ?? keybindings,
 		editInput: options.editInput ?? (async () => undefined),
 		collapseKey: "off",
+		canReopenWhileHidden: false,
 	});
 	return { session, done };
 }
@@ -224,6 +226,50 @@ describe("QuestionnaireSession — custom-answer drafts", () => {
 		});
 	});
 
+	it("commits the typed draft with a remapped tui.input.submit key (#156)", () => {
+		// Slack-style config: enter is folded into tui.input.newLine (colliding with
+		// the default tui.select.confirm), submit lives on its own key. The submit
+		// key must confirm the custom answer instead of falling through to the
+		// editor, whose own submit handling would wipe the draft.
+		const CTRL_ENTER = "<CTRL_ENTER>";
+		const remapped: typeof keybindings = {
+			matches(data: string, name: string): boolean {
+				if (name === "tui.input.submit") return data === CTRL_ENTER;
+				if (name === "tui.input.newLine") return data === ENTER || data === SHIFT_ENTER;
+				return keybindings.matches(data, name);
+			},
+		};
+		const { session, done } = makeSession({ keybindings: remapped });
+		focusCustomAnswer(session);
+		session.dispatch("first line");
+		session.dispatch(SHIFT_ENTER);
+		session.dispatch("second line");
+		session.dispatch(CTRL_ENTER);
+
+		expect(done).toHaveBeenCalledWith({
+			answers: [expect.objectContaining({ kind: "custom", answer: "first line\nsecond line" })],
+			cancelled: false,
+		});
+	});
+
+	it("a raw Enter byte the router does not match cannot wipe the draft via the editor's own submit (#156)", () => {
+		// The session fake matches only the <ENTER> sentinel, so a raw "\r" reaches
+		// the headless Editor, whose GLOBAL keybindings still bind tui.input.submit
+		// to enter. Without disableSubmit, Editor.submitValue() would reset the
+		// buffer and silently destroy the draft.
+		const { session, done } = makeSession();
+		focusCustomAnswer(session);
+		session.dispatch("precious draft");
+		session.dispatch("\r");
+		expect(session.component.render(120).join("\n")).toContain("precious draft");
+		session.dispatch(ENTER);
+
+		expect(done).toHaveBeenCalledWith({
+			answers: [expect.objectContaining({ kind: "custom", answer: "precious draft" })],
+			cancelled: false,
+		});
+	});
+
 	it("keeps each question's latest draft isolated through real navigation and tab switches", () => {
 		const multiParams: QuestionParams = {
 			questions: [
@@ -252,102 +298,17 @@ describe("QuestionnaireSession — custom-answer drafts", () => {
 	});
 });
 
-describe("QuestionnaireSession — extractPartialAnswersAndClose", () => {
-	it("extracts nothing when no question was answered and closes without cancellation", () => {
-		const { session, done } = makeSession();
-		const result = session.extractPartialAnswersAndClose();
-		expect(result).toEqual({ answers: [], cancelled: false });
-		expect(done).toHaveBeenCalledTimes(1);
-	});
-
-	it("extracts only the answered questions with original indices", () => {
-		const multiParams: QuestionParams = {
-			questions: [
-				{ ...params.questions[0]!, question: "First?", header: "First" },
-				{ ...params.questions[0]!, question: "Second?", header: "Second" },
-			],
-		};
-		const { session, done } = makeSession({ params: multiParams });
-
-		// Answer Q1 (auto-advances to Q2), leave Q2 unanswered.
-		focusCustomAnswer(session);
-		session.dispatch("first answer");
-		session.dispatch(ENTER);
-
-		const result = session.extractPartialAnswersAndClose();
-		expect(result.cancelled).toBe(false);
-		expect(result.answers).toEqual([
-			{ questionIndex: 0, question: "First?", kind: "custom", answer: "first answer" },
-		]);
-		expect(done).toHaveBeenCalledTimes(1);
-	});
-
-	it("extracts every answer when all questions are answered", () => {
-		const multiParams: QuestionParams = {
-			questions: [
-				{ ...params.questions[0]!, question: "First?", header: "First" },
-				{ ...params.questions[0]!, question: "Second?", header: "Second" },
-			],
-		};
-		const { session, done } = makeSession({ params: multiParams });
-
-		// Answering Q1 auto-advances to Q2 (autoAdvanceTab in multi mode), so no TAB here.
-		focusCustomAnswer(session);
-		session.dispatch("first answer");
-		session.dispatch(ENTER);
-		focusCustomAnswer(session);
-		session.dispatch("second answer");
-		session.dispatch(ENTER);
-
-		const result = session.extractPartialAnswersAndClose();
-		expect(result.answers).toEqual([
-			{ questionIndex: 0, question: "First?", kind: "custom", answer: "first answer" },
-			{ questionIndex: 1, question: "Second?", kind: "custom", answer: "second answer" },
-		]);
-		expect(done).toHaveBeenCalledTimes(1);
-	});
-
-	it("is idempotent against a racing user submit: done fires exactly once", () => {
-		const { session, done } = makeSession();
-		// Answer the single question the normal way — this closes the dialog.
-		focusCustomAnswer(session);
-		session.dispatch("answer");
-		session.dispatch(ENTER);
-		expect(done).toHaveBeenCalledTimes(1);
-
-		// A late handoff must not double-resolve the host dialog.
-		const result = session.extractPartialAnswersAndClose();
-		expect(result.answers).toHaveLength(1);
-		expect(done).toHaveBeenCalledTimes(1);
-	});
-
-	it("extracts an option answer with its preview", () => {
-		const { session, done } = makeSession({
-			params: {
-				questions: [
-					{
-						question: "Layout?",
-						header: "Layout",
-						options: [
-							{ label: "Centered", description: "c", preview: "## Mock" },
-							{ label: "Left", description: "l" },
-						],
-					},
-				],
-			},
-		});
-		session.dispatch(DOWN);
-		session.dispatch(ENTER);
-
-		const result = session.extractPartialAnswersAndClose();
-		expect(result.answers).toEqual([
-			{
-				questionIndex: 0,
-				question: "Layout?",
-				kind: "option",
-				answer: "Left",
-			},
-		]);
-		expect(done).toHaveBeenCalledTimes(1);
+describe("QuestionnaireSession — collapsed row with collapseKey 'off'", () => {
+	it("renders the cancel-only line, never a literal 'Off to expand' (#176)", () => {
+		// The router and raw listener never collapse when off, but
+		// toggleCollapsedExternal() is a public ungated entry — the collapsed row
+		// must not advertise a disabled shortcut if a caller forces it.
+		const { session } = makeSession();
+		session.toggleCollapsedExternal();
+		const collapsed = session.component.render(120);
+		expect(collapsed).toHaveLength(1);
+		expect(collapsed[0]).toContain("Esc to cancel");
+		expect(collapsed[0]).not.toContain("to expand");
+		expect(collapsed[0]).not.toContain("Off");
 	});
 });

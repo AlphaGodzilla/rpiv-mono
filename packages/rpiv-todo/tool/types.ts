@@ -74,8 +74,7 @@ export interface TaskMutationParams {
 
 // ---------------------------------------------------------------------------
 // TypeBox parameter schema — every `description` doubles as LLM-facing prompt
-// copy. Field order and wording are pinned by registration tests and the
-// pre-refactor schema at `packages/rpiv-todo/todo.ts:512-573`.
+// copy. Field order and wording are pinned by registration tests.
 // ---------------------------------------------------------------------------
 
 export const TodoParamsSchema = Type.Object({

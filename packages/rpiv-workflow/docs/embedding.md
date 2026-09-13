@@ -23,10 +23,10 @@ package boundary.
 
 | Entry | Contents | When to import it |
 | --- | --- | --- |
-| `@juicesharp/rpiv-workflow` | Everything in `/registration` plus the runner (`runWorkflow`, `runWorkflowByName`, `resumeWorkflow`, `resumeWorkflowByRunId`) | Embedders that execute runs |
+| `@juicesharp/rpiv-workflow` | Everything in `/registration` plus the runner (`runWorkflow`, `runWorkflowByName`, `resumeWorkflow`, `resumeWorkflowByRunId`), the budget defaults (`MAX_BACKWARD_JUMPS`, `MAX_LAPS`, `MAX_ITERATIONS`), `validateRunBudgets` and its `RunBudgetOptions` type | Embedders that execute runs |
 | `@juicesharp/rpiv-workflow/registration` | The runner-free surface: DSL, loader, outcomes, handles, validators, host port types. The single canonical enumeration of the public API | Authoring, loading, validating — skips the ~530 ms engine graph |
 | `@juicesharp/rpiv-workflow/startup` | Only the registrars a sibling wires at extension load (~9 ms) | Extension `default` exports |
-| `@juicesharp/rpiv-workflow/runner` | The runner surface on its own, plus `StagePreflightError` and `MAX_BACKWARD_JUMPS` | Callers that already hold the DSL elsewhere |
+| `@juicesharp/rpiv-workflow/runner` | The runner surface on its own, plus `StagePreflightError`, the budget defaults (`MAX_BACKWARD_JUMPS`, `MAX_LAPS`, `MAX_ITERATIONS`), `validateRunBudgets` and its `RunBudgetOptions` type | Callers that already hold the DSL elsewhere |
 | `@juicesharp/rpiv-workflow/internal` | Test-only seams (`recordStage`, registry resets) | Tests |
 
 The Pi extension `default` entry is `./extension.ts`, not the barrel — loading
@@ -60,7 +60,7 @@ because rpiv-workflow must not import rpiv-pi.
 ```ts
 spawnChild<T>(options: {
   prompt: string;
-  model?: ModelSelection;              // { model?: string; thinking?: "off" | … | "xhigh" }
+  model?: ModelSelection;              // { model?: string; thinking?: "off" or a graded thinking level Pi reports }
   signal?: AbortSignal;                // abort THIS child mid-flight
   reattach?: { sessionFile: string };  // open the persisted session in place
   fork?: { sessionFile: string };      // fork it into a new child (sessionPolicy: "continue")
@@ -151,6 +151,7 @@ const result = await runWorkflow(ctx, {   // ctx: WorkflowHostContext
 | `host` | `WorkflowHost` | none; used for the skill-registration preflight snapshot |
 | `maxIterations` | `number` | `32` — run-wide cap on loop units of every kind |
 | `maxBackwardJumps` | `number` | `3` per destination stage |
+| `maxLaps` | `number` | `8` per destination stage — absolute ceiling on decision-edge re-entries; improved-waived laps count toward it. Fresh per invocation (a resume starts both re-entry ledgers empty) |
 | `trigger` | `RunTrigger` | `{ kind: "programmatic" }` |
 | `lifecycle` | `LifecycleListeners` | none |
 | `signal` | `AbortSignal` | none |
@@ -215,7 +216,7 @@ Like `runWorkflowByName`, neither throws: an unresolvable run-id, error-severity
 load issues, a workflow that is no longer registered, or an unreconstructable trail
 each come back as a failure envelope.
 
-Run trails carry a schema version (`STATE_SCHEMA_VERSION = 2`). Resuming a run
+Run trails carry a schema version (`STATE_SCHEMA_VERSION = 3`). Resuming a run
 recorded under a different version is **refused** with a version mismatch — there
 is no in-place migration.
 
@@ -338,4 +339,5 @@ Row **writes** are runner-owned. Readers are public:
 | `readHeader(cwd, runId)` | The run's header row |
 | `readLastStage(cwd, runId)` | The most recent stage row |
 | `listArtifacts(cwd, runId)` | Every artifact the run recorded |
+| `summarizeRun(cwd, runId)` | A `RunRecap \| undefined` (terminal `outcome` + display-string `artifacts` + `workflow` projected from the trail; `outcome` is `"completed"` for a `collected:true` collect-all halt) — `undefined` when the run has no stage rows |
 | `runFileFor(cwd, run)` | The absolute path of the run's JSONL file. `run` is anything carrying `runId` — a `RunSummary` or `WorkflowHeader` |

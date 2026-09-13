@@ -57,14 +57,15 @@ function stripOutcomes(w: Workflow, keep: (stageName: string) => boolean = () =>
 // ---------------------------------------------------------------------------
 
 describe("BUCKET_BY_KIND", () => {
-	it("contains exactly 12 entries", () => {
-		expect(Object.keys(BUCKET_BY_KIND)).toHaveLength(12);
+	it("contains exactly 13 entries", () => {
+		expect(Object.keys(BUCKET_BY_KIND)).toHaveLength(13);
 	});
 
 	it("covers all artifactKinds used by produces skills", () => {
 		const expectedKinds = [
 			"plan",
 			"research",
+			"acceptance",
 			"slices",
 			"design",
 			"elaboration",
@@ -260,6 +261,7 @@ describe("equivalence — built-in workflows", () => {
 	 */
 	const BUILTIN_CONTRACTS: Array<[string, string]> = [
 		["research", "research"],
+		["acceptance", "acceptance"],
 		["blueprint", "plan"],
 		["design", "design"],
 		["plan", "plan"],
@@ -272,20 +274,22 @@ describe("equivalence — built-in workflows", () => {
 		["design-slice", "design"],
 		["synthesize", "plan"],
 		["elaborate", "elaboration"],
+		// ship's derivable produces skill
+		["quick-plan", "plan"],
 	];
 
 	/**
-	 * Expected bucket name for each produces stage across all 3 workflows.
+	 * Expected bucket name for each produces stage across all 4 workflows.
 	 * Key: "workflowName::stageName". Value: expected outcome.name.
 	 */
 	const EXPECTED: Record<string, string> = {
 		// build: derivable produces stages only — the
 		// explicit-outcome stages below are asserted separately.
 		"build::research": "research",
+		"build::acceptance": "acceptance",
 		"build::slice": "slices",
 		"build::slice-design": "designs",
 		"build::plan": "plans",
-		"build::code": "elaborations",
 		"build::validate": "validation",
 		// vet
 		"vet::code-review": "reviews",
@@ -296,6 +300,11 @@ describe("equivalence — built-in workflows", () => {
 		"polish::blueprint": "plans",
 		"polish::validate": "validation",
 		"polish::code-review": "reviews",
+		// ship
+		"ship::research": "research",
+		"ship::acceptance": "acceptance",
+		"ship::plan": "plans",
+		"ship::validate": "validation",
 	};
 
 	/**
@@ -314,6 +323,9 @@ describe("equivalence — built-in workflows", () => {
 		// republishes them on the `designs` channel (latest-wins) for synthesize.
 		"build::design-review": "designs",
 		"build::subplan": "subplans",
+		// code keeps the derived bucket but swaps in the structural elaboration
+		// parser, so the contract can refuse a section the stitch would mis-splice.
+		"build::code": "elaborations",
 		"build::plan-grade": "plan-verdicts",
 		// The confirm arms re-judge on the SAME verdict channel as their gate.
 		"build::plan-confirm": "plan-verdicts",
@@ -321,6 +333,17 @@ describe("equivalence — built-in workflows", () => {
 		"build::code-grade": "code-verdicts",
 		"build::code-confirm": "code-verdicts",
 		"build::code-fix": "plans",
+		// ship's grade publishes verdicts on its own channel (derivation maps one
+		// kind → one bucket, so the ship gate keeps an explicit outcome).
+		"ship::grade": "ship-verdicts",
+		// The reconcile-fix amend arms are PROMPT stages (no skill contract to
+		// derive from — the /skill:amend dispatch lives in the prompt text), so
+		// each carries an explicit outcome on the arm's OWN channel — the round
+		// counter reconcileGate's cap reads (amend re-emits the plan in place,
+		// so the plans channel needs no republish).
+		"build::reconcile-fix": "reconcile-fix",
+		"vet::reconcile-fix": "reconcile-fix",
+		"ship::reconcile-fix": "reconcile-fix",
 	};
 
 	/**
@@ -335,6 +358,41 @@ describe("equivalence — built-in workflows", () => {
 		"build::commit",
 		"build::implement",
 		"build::code-splice",
+		"ship::commit",
+		"ship::implement",
+	]);
+
+	/**
+	 * The script produces stages (a `run` function IS the envelope — no outcome
+	 * is derived) across the built-in workflows, as declared keys. The census
+	 * is DERIVED from the declared partitions (EXPECTED + EXPLICIT_OUTCOMES +
+	 * SCRIPT_STAGES), so adding a script stage fails the per-stage guard naming
+	 * the stage and its bucket — never a context-free count mismatch — and a
+	 * REMOVED stage fails the stale-entry assertion below. Keep this set in
+	 * lockstep with the workflows' `produces.script` stages.
+	 */
+	const SCRIPT_STAGES = new Set([
+		"build::slice-check",
+		"build::subplan-check",
+		"build::goal",
+		"build::plan-cite-check",
+		"build::code-cite-check",
+		"build::implement-scope-check",
+		"build::scope-quarantine",
+		"build::reconcile",
+		"build::plan-snapshot",
+		"build::code-snapshot",
+		"build::plan-demote",
+		"build::code-demote",
+		"build::slice-seed-lift",
+		"vet::goal",
+		"vet::implement-scope-check",
+		"vet::scope-quarantine",
+		"vet::reconcile",
+		"ship::goal",
+		"ship::plan-cite-check",
+		"ship::implement-scope-check",
+		"ship::reconcile",
 	]);
 
 	// Need architecture-review contract too
@@ -378,6 +436,12 @@ describe("equivalence — built-in workflows", () => {
 				// deriveOutcomes skips them on `stage.run != null` and they have no EXPECTED
 				// bucket. They publish under their own stage name.
 				if (stage.run != null) {
+					if (!SCRIPT_STAGES.has(key)) {
+						it(`${stageName}: script produces stage missing from SCRIPT_STAGES`, () => {
+							expect.fail(`Script produces stage ${key} missing from SCRIPT_STAGES — add it (bucket: script)`);
+						});
+						continue;
+					}
 					it(`${stageName}: script produces stage, no outcome derived`, () => {
 						expect(stage.outcome).toBeUndefined();
 					});
@@ -413,7 +477,7 @@ describe("equivalence — built-in workflows", () => {
 		});
 	}
 
-	it("total produces stages across all workflows = 37 (13 derivable + 10 explicit + 14 script)", () => {
+	it("total produces stages across all workflows = EXPECTED + EXPLICIT + SCRIPT_STAGES (the derived census)", () => {
 		let count = 0;
 		let scriptProduces = 0;
 		for (const w of builtInWorkflows) {
@@ -422,13 +486,17 @@ describe("equivalence — built-in workflows", () => {
 				if (stage.kind === "produces" && stage.run != null) scriptProduces++;
 			}
 		}
-		expect(count).toBe(37);
-		// build::slice-check + build::subplan-check + build::goal + build::plan-cite-check
-		// + build::code-cite-check + build::implement-scope-check + build::reconcile
-		// + build::plan-snapshot + build::code-snapshot
-		// + build::plan-demote + build::code-demote
-		// + vet::goal + vet::implement-scope-check + vet::reconcile
-		expect(scriptProduces).toBe(14);
+		expect(count).toBe(Object.keys(EXPECTED).length + Object.keys(EXPLICIT_OUTCOMES).length + SCRIPT_STAGES.size);
+		expect(scriptProduces).toBe(SCRIPT_STAGES.size);
+	});
+
+	it("every declared census key has a live stage (no stale EXPECTED/EXPLICIT/SCRIPT_STAGES entries)", () => {
+		const live = new Set<string>();
+		for (const w of builtInWorkflows) {
+			for (const stageName of Object.keys(w.stages)) live.add(`${w.name}::${stageName}`);
+		}
+		for (const key of [...Object.keys(EXPECTED), ...Object.keys(EXPLICIT_OUTCOMES), ...SCRIPT_STAGES])
+			expect(live.has(key), `stale declared entry ${key}`).toBe(true);
 	});
 });
 
