@@ -12,6 +12,12 @@ render at all.
 | Feishu remote mode (`remote.enabled`, receiver configured) | `ask_user_question` in its tool list | One Feishu message per question; you reply in Feishu |
 | Non-interactive run (no UI) | Nothing — the tool is removed | Nothing |
 
+### Terminal attention
+
+After UI availability and questionnaire validation succeed, the package emits exactly one standard terminal BEL (`\x07`) immediately before the interactive wait begins. The signal is sent to `stdout` only when `process.stdout.isTTY` is true, so redirected output and non-TTY RPC streams stay untouched. A TTY-backed RPC dialog walker receives the same signal as the TUI path.
+
+The BEL is best effort: if the synchronous terminal write fails, the questionnaire continues and its existing prompt/blocked lifecycle and result envelope are unchanged. The terminal configuration decides whether the BEL is audible, visual, or ignored. No BEL is emitted for missing UI, invalid questionnaires, or a failed TUI session load.
+
 ## Feishu remote mode
 
 When `remote.enabled` is `true`, a Feishu receiver is configured and the pi-channel plugin

@@ -312,3 +312,103 @@ describe("QuestionnaireSession — collapsed row with collapseKey 'off'", () => 
 		expect(collapsed[0]).not.toContain("Off");
 	});
 });
+
+describe("QuestionnaireSession — extractPartialAnswersAndClose", () => {
+	it("extracts nothing when no question was answered and closes without cancellation", () => {
+		const { session, done } = makeSession();
+		const result = session.extractPartialAnswersAndClose();
+		expect(result).toEqual({ answers: [], cancelled: false });
+		expect(done).toHaveBeenCalledTimes(1);
+	});
+
+	it("extracts only the answered questions with original indices", () => {
+		const multiParams: QuestionParams = {
+			questions: [
+				{ ...params.questions[0]!, question: "First?", header: "First" },
+				{ ...params.questions[0]!, question: "Second?", header: "Second" },
+			],
+		};
+		const { session, done } = makeSession({ params: multiParams });
+
+		// Answer Q1 (auto-advances to Q2), leave Q2 unanswered.
+		focusCustomAnswer(session);
+		session.dispatch("first answer");
+		session.dispatch(ENTER);
+
+		const result = session.extractPartialAnswersAndClose();
+		expect(result.cancelled).toBe(false);
+		expect(result.answers).toEqual([
+			{ questionIndex: 0, question: "First?", kind: "custom", answer: "first answer" },
+		]);
+		expect(done).toHaveBeenCalledTimes(1);
+	});
+
+	it("extracts every answer when all questions are answered", () => {
+		const multiParams: QuestionParams = {
+			questions: [
+				{ ...params.questions[0]!, question: "First?", header: "First" },
+				{ ...params.questions[0]!, question: "Second?", header: "Second" },
+			],
+		};
+		const { session, done } = makeSession({ params: multiParams });
+
+		// Answering Q1 auto-advances to Q2 (autoAdvanceTab in multi mode), so no TAB here.
+		focusCustomAnswer(session);
+		session.dispatch("first answer");
+		session.dispatch(ENTER);
+		focusCustomAnswer(session);
+		session.dispatch("second answer");
+		session.dispatch(ENTER);
+
+		const result = session.extractPartialAnswersAndClose();
+		expect(result.answers).toEqual([
+			{ questionIndex: 0, question: "First?", kind: "custom", answer: "first answer" },
+			{ questionIndex: 1, question: "Second?", kind: "custom", answer: "second answer" },
+		]);
+		expect(done).toHaveBeenCalledTimes(1);
+	});
+
+	it("is idempotent against a racing user submit: done fires exactly once", () => {
+		const { session, done } = makeSession();
+		// Answer the single question the normal way — this closes the dialog.
+		focusCustomAnswer(session);
+		session.dispatch("answer");
+		session.dispatch(ENTER);
+		expect(done).toHaveBeenCalledTimes(1);
+
+		// A late handoff must not double-resolve the host dialog.
+		const result = session.extractPartialAnswersAndClose();
+		expect(result.answers).toHaveLength(1);
+		expect(done).toHaveBeenCalledTimes(1);
+	});
+
+	it("extracts an option answer with its preview", () => {
+		const { session, done } = makeSession({
+			params: {
+				questions: [
+					{
+						question: "Layout?",
+						header: "Layout",
+						options: [
+							{ label: "Centered", description: "c", preview: "## Mock" },
+							{ label: "Left", description: "l" },
+						],
+					},
+				],
+			},
+		});
+		session.dispatch(DOWN);
+		session.dispatch(ENTER);
+
+		const result = session.extractPartialAnswersAndClose();
+		expect(result.answers).toEqual([
+			{
+				questionIndex: 0,
+				question: "Layout?",
+				kind: "option",
+				answer: "Left",
+			},
+		]);
+		expect(done).toHaveBeenCalledTimes(1);
+	});
+});
