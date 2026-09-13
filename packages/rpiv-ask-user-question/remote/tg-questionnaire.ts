@@ -1,9 +1,9 @@
 import { t } from "../state/i18n-bridge.js";
 import type { QuestionAnswer } from "../tool/types.js";
+import { classifyRemoteError, type TgTransport } from "./channel-transport.js";
 import { parseReply } from "./message-format.js";
 import type { RemoteConfig } from "./remote-config.js";
 import type { RemoteOutcome, RemoteQuestion } from "./remote-questionnaire.js";
-import { classifyRemoteError, type TgTransport } from "./tg-channel.js";
 import { buildTgKeyboard, buildTgQuestionMessage } from "./tg-message.js";
 
 /**

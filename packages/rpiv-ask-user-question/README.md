@@ -42,7 +42,7 @@ When the model asks several things at once, `Tab` moves between them and a Submi
 - **Notes on any answer** — `n` opens a multiline note editor on any question tab; the note travels back to the model alongside the choice without marking the question answered.
 - **Read the transcript behind the dialog** — `Ctrl+]` collapses the overlay so you can scroll the conversation, then brings it back with your answers intact.
 - **Works outside the terminal too** — in RPC and ACP hosts such as the VS Code pendant or Zed the questionnaire walks through the host's native dialogs, and in non-interactive runs the tool is removed from the model's tool list instead of failing every call.
-- **Ask from your phone** — with a Feishu bot configured, `remote.enabled` sends every question to Feishu as interactive cards with clickable option buttons (group chats need an @), and `localTimeoutMs` makes an unanswered local dialog hand its remaining questions to Feishu after a delay. Toggle it live with `/remote-ask`.
+- **Ask from your phone** — with the pi-channel plugin and a Feishu receiver configured, `remote.enabled` sends every question to Feishu as interactive cards with clickable option buttons (group chats need an @), and `localTimeoutMs` makes an unanswered local dialog hand its remaining questions to Feishu after a delay. Toggle it live with `/rpiv-ask-user-question remote`.
 ## Configuration
 Optional. Settings live in `~/.config/rpiv-ask-user-question/config.json`; the file is read, never written.
 
@@ -70,8 +70,6 @@ Point `ask_user_question` at a Feishu bot so you can answer from anywhere:
     "localTimeoutMs": 300000,
     "timeoutMs": 600000,
     "feishu": {
-      "appId": "cli_xxx",
-      "appSecret": "xxx",
       "receivers": [
         { "type": "email", "value": "me@example.com" }
       ]
@@ -80,11 +78,11 @@ Point `ask_user_question` at a Feishu bot so you can answer from anywhere:
 }
 ```
 
-1. Create an enterprise self-built app at the [Feishu developer console](https://open.feishu.cn/app) and enable the **long-connection (长连接) event subscription** with the `im.message.receive_v1` event, plus the `im:message` send permission.
-2. Put `appId`/`appSecret` and your `receivers` in the config. Receiver `type` is a native `receive_id_type`: `open_id`, `user_id`, `union_id`, `email`, or `chat_id` (find your `open_id`/`chat_id` via the Feishu console's debug tools).
+1. Install the **pi-channel** plugin and give it a Feishu enterprise self-built app (create one at the [Feishu developer console](https://open.feishu.cn/app), enable the **long-connection (长连接) event subscription** with the `im.message.receive_v1` event, plus the `im:message` send permission). The plugin owns the `appId`/`appSecret` and the connection.
+2. Put your `receivers` in this config. Receiver `type` is a native `receive_id_type`: `open_id`, `user_id`, `union_id`, `email`, or `chat_id` (find your `open_id`/`chat_id` via the Feishu console's debug tools).
 3. `remote.enabled: true` sends every questionnaire to Feishu as **interactive cards** — click an option button to answer (it gets a ✓ and the rest disable), or reply with the option number, `1,3` for multi-select, plain text, or a cancel word. In group chats the bot only answers when @'d. Set `feishu.useCards: false` to fall back to plain-text messages.
 4. Alternatively leave `enabled` off and set `localTimeoutMs`: an unanswered local dialog closes after that many milliseconds and hands its **remaining** questions to Feishu, keeping your local answers.
-5. `/remote-ask` (in Pi) toggles the mode on/off and prints the current status; `/remote-ask status` shows credentials and receivers. The command writes `remote.enabled` back to the config file.
+5. `/rpiv-ask-user-question remote` (in Pi) toggles the mode on/off and prints the current status; `remote status` shows the receivers and whether the fallback is armed. The command writes `remote.enabled` back to the config file.
 
 Full behavior, failure envelopes, and the RPC/ACP interplay: [configuration](https://github.com/juicesharp/rpiv-mono/blob/main/packages/rpiv-ask-user-question/docs/configuration.md) and [hosts](https://github.com/juicesharp/rpiv-mono/blob/main/packages/rpiv-ask-user-question/docs/hosts.md).
 

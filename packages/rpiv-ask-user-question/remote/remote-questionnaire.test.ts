@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionData } from "../tool/types.js";
-import type { RemoteReply, RemoteTransport } from "./feishu-channel.js";
+import type { RemoteReply, RemoteTransport } from "./channel-transport.js";
 import { loadRemoteConfig, type RemoteConfig } from "./remote-config.js";
 import { type RemoteQuestion, runRemoteQuestionnaire } from "./remote-questionnaire.js";
 
@@ -22,8 +22,6 @@ function makeCfg(over: Partial<RemoteConfig> = {}, useCards = true): RemoteConfi
 		timeoutMs: 10_000,
 		cancelWords: ["取消", "cancel"],
 		feishu: {
-			appId: "cli_1",
-			appSecret: "s",
 			useCards,
 			receivers: [
 				{ type: "email", value: "me@example.com" },

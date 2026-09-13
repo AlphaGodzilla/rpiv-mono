@@ -28,15 +28,12 @@ export interface FeishuReceiver {
 }
 
 export interface FeishuRemoteConfig {
-	appId: string;
-	appSecret: string;
 	receivers: FeishuReceiver[];
 	/** Send questions as interactive cards (single-select: clickable option buttons). Default true. */
 	useCards: boolean;
 }
 
 export interface TgRemoteConfig {
-	botToken: string;
 	/** Target chat — group/supergroup ids are negative, kept as a string. */
 	chatId: string;
 	/** The @-mentioned user's numeric id; ONLY replies from this id count as answers. */
@@ -47,12 +44,10 @@ export interface TgRemoteConfig {
 	useCards: boolean;
 	/** Per-question wait timeout for tg, INDEPENDENT of the feishu `timeoutMs`. Default 30 minutes. */
 	timeoutMs: number;
-	/** Optional HTTP(S) proxy (e.g. "http://127.0.0.1:6152"). Falls back to env then the macOS system proxy. */
-	proxy: string | undefined;
 }
 
 export interface RemoteConfig {
-	/** Remote-as-primary mode. When true (and credentials are complete) every questionnaire goes to Feishu. */
+	/** Remote-as-primary mode. When true (and receivers are configured) every questionnaire goes to Feishu. */
 	enabled: boolean;
 	/**
 	 * Local-timeout fallback threshold (ms). OPTIONAL on purpose — the fallback
@@ -96,15 +91,13 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 		localTimeoutMs: undefined,
 		timeoutMs: DEFAULT_REMOTE_TIMEOUT_MS,
 		cancelWords: [...DEFAULT_CANCEL_WORDS],
-		feishu: { appId: "", appSecret: "", receivers: [], useCards: true },
+		feishu: { receivers: [], useCards: true },
 		tg: {
-			botToken: "",
 			chatId: "",
 			userId: 0,
 			username: undefined,
 			useCards: true,
 			timeoutMs: DEFAULT_TG_TIMEOUT_MS,
-			proxy: undefined,
 		},
 	};
 	if (!raw || typeof raw !== "object") return cfg;
@@ -127,8 +120,8 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 
 	if (r.feishu && typeof r.feishu === "object") {
 		const f = r.feishu as Record<string, unknown>;
-		if (isNonEmptyString(f.appId)) cfg.feishu.appId = f.appId;
-		if (isNonEmptyString(f.appSecret)) cfg.feishu.appSecret = f.appSecret;
+		// Legacy appId/appSecret are ignored — the pi-channel plugin owns the
+		// provider credentials now. Old config files keep parsing.
 		if (typeof f.useCards === "boolean") cfg.feishu.useCards = f.useCards;
 		if (Array.isArray(f.receivers)) {
 			cfg.feishu.receivers = f.receivers
@@ -139,7 +132,7 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 
 	if (r.tg && typeof r.tg === "object") {
 		const tg = r.tg as Record<string, unknown>;
-		if (isNonEmptyString(tg.botToken)) cfg.tg.botToken = tg.botToken;
+		// Legacy botToken/proxy are ignored (owned by the pi-channel plugin).
 		if (isNonEmptyString(tg.chatId)) cfg.tg.chatId = tg.chatId;
 		if (typeof tg.userId === "number" && Number.isInteger(tg.userId) && tg.userId > 0) cfg.tg.userId = tg.userId;
 		if (typeof tg.username === "string") {
@@ -149,22 +142,21 @@ export function loadRemoteConfig(raw: unknown): RemoteConfig {
 		if (typeof tg.useCards === "boolean") cfg.tg.useCards = tg.useCards;
 		if (typeof tg.timeoutMs === "number" && Number.isFinite(tg.timeoutMs) && tg.timeoutMs > 0)
 			cfg.tg.timeoutMs = tg.timeoutMs;
-		if (typeof tg.proxy === "string" && tg.proxy.trim().length > 0) cfg.tg.proxy = tg.proxy.trim();
 	}
 	return cfg;
 }
 
-/** Credentials complete enough to send/receive on Feishu — independent of `enabled`. */
+/** At least one receiver to answer — the app credentials live in the pi-channel plugin. Independent of `enabled`. */
 export function isFeishuConfigured(cfg: RemoteConfig): boolean {
-	return cfg.feishu.appId.length > 0 && cfg.feishu.appSecret.length > 0 && cfg.feishu.receivers.length > 0;
+	return cfg.feishu.receivers.length > 0;
 }
 
-/** Credentials complete enough to send/receive on Telegram — independent of `enabled` and of the ask-prd session flag. */
+/** Target chat AND @-user id present — the bot token lives in the pi-channel plugin. Independent of `enabled`. */
 export function isTgConfigured(cfg: RemoteConfig): boolean {
-	return cfg.tg.botToken.length > 0 && cfg.tg.chatId.length > 0 && cfg.tg.userId > 0;
+	return cfg.tg.chatId.length > 0 && cfg.tg.userId > 0;
 }
 
-/** Remote-as-primary mode active: `enabled` AND usable credentials. */
+/** Remote-as-primary mode active: `enabled` AND at least one Feishu receiver. */
 export function shouldUseRemote(cfg: RemoteConfig): boolean {
 	return cfg.enabled && isFeishuConfigured(cfg);
 }

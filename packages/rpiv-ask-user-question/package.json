@@ -44,11 +44,9 @@
 		"!docs/*.svg",
 		"README.md",
 		"remote/ask-prd-state.ts",
+		"remote/channel-transport.ts",
 		"remote/tg-message.ts",
-		"remote/tg-http.ts",
-		"remote/tg-channel.ts",
 		"remote/tg-questionnaire.ts",
-		"remote/feishu-channel.ts",
 		"remote/message-format.ts",
 		"remote/rpiv-command.ts",
 		"remote/remote-config.ts",
@@ -104,7 +102,6 @@
 	},
 	"dependencies": {
 		"@juicesharp/rpiv-config": "workspace:*",
-		"@larksuiteoapi/node-sdk": "^1.73.0",
 		"typebox": "^1.1.24"
 	}
 }

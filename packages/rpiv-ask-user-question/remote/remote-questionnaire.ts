@@ -1,6 +1,6 @@
 import { t } from "../state/i18n-bridge.js";
 import type { QuestionAnswer, QuestionData, QuestionnaireResult } from "../tool/types.js";
-import { classifyRemoteError, type RemoteTransport } from "./feishu-channel.js";
+import { classifyRemoteError, type RemoteTransport } from "./channel-transport.js";
 import { buildQuestionCard, buildQuestionMessage, parseReply } from "./message-format.js";
 import type { RemoteConfig } from "./remote-config.js";
 

@@ -11,7 +11,7 @@ wrong.
 
 The file is optional — with no config at all, every setting takes its default. During
 normal operation the package only ever *reads* the file; the one exception is the
-`/remote-ask` command, which writes back the `remote.enabled` flag (and nothing else). The
+`/rpiv-ask-user-question remote` command, which writes back the `remote.enabled` flag (and nothing else). The
 package never creates, chmods or rewrites the file otherwise, so its permissions are
 whatever you give it.
 
@@ -33,8 +33,6 @@ A complete example:
     "timeoutMs": 600000,
     "cancelWords": ["取消", "cancel"],
     "feishu": {
-      "appId": "cli_xxx",
-      "appSecret": "xxx",
       "receivers": [
         { "type": "email", "value": "me@example.com" },
         { "type": "chat_id", "value": "oc_xxx" }
@@ -118,9 +116,10 @@ tool, so changes take effect on the next Pi restart.
 ### `remote` — Feishu remote asking
 
 Lets `ask_user_question` reach you through a Feishu bot instead of (or after) the local
-dialog. Credentials and receivers live in this config file — there is no environment-variable
-or wizard path. Everything under `remote` is optional; with it absent, behavior is
-identical to a version without this feature.
+dialog. Receivers live in this config file; the app credentials and the websocket
+connection are owned by the **pi-channel** plugin (`ag-pi-channel`), which must be
+installed and configured for Feishu. Everything under `remote` is optional; with it
+absent, behavior is identical to a version without this feature.
 
 | Field | What it does | Default |
 | --- | --- | --- |
@@ -128,11 +127,10 @@ identical to a version without this feature.
 | `localTimeoutMs` | Local-timeout fallback threshold. **Only when configured** does an unanswered local dialog hand its remaining questions to Feishu after this many milliseconds. Absent → no local timeout, original flow. | not set |
 | `timeoutMs` | How long to wait for a Feishu reply per question. On timeout the unanswered questions are re-asked in the main conversation instead of being treated as a decline. | `600000` (10 min) |
 | `cancelWords` | Exact-match words (after trim, case-insensitive) that abort the remote questionnaire. | `["取消", "cancel"]` |
-| `feishu.appId` / `feishu.appSecret` | Credentials of a Feishu enterprise self-built app (开发者后台 → 凭证与基础信息). | — |
 | `feishu.receivers` | Who receives the questions. Each entry is `{ "type", "value" }`; `type` is one of `open_id`, `user_id`, `union_id`, `email`, `chat_id` (the native `receive_id_type` values — no phone lookup). Invalid entries are dropped. | `[]` |
 | `feishu.useCards` | Send questions as interactive cards. Single-select questions get one clickable button per option plus a Cancel button (the chosen button is checked ✓ and the rest disabled after a click); multi-select questions render the options in the card but still take a text reply (`1,2`). Card sends fall back to plain text automatically. | `true` |
 
-Behavior matrix (when credentials are complete):
+Behavior matrix (when a Feishu receiver is configured and the pi-channel plugin provides the credentials):
 
 | `enabled` | `localTimeoutMs` | Behavior |
 | --- | --- | --- |
@@ -140,7 +138,7 @@ Behavior matrix (when credentials are complete):
 | `false` | configured | Local dialog first; after `localTimeoutMs` it closes, local answers are kept, and the remaining questions go to Feishu. |
 | `false` | not set | Original flow, no timeout. |
 
-If `localTimeoutMs` is configured but the Feishu credentials are missing, the fallback is
+If `localTimeoutMs` is configured but no Feishu receiver is configured, the fallback is
 silently disabled — the local dialog never times out, so a config mistake cannot turn a
 waiting user into a cancelled questionnaire.
 
@@ -168,10 +166,10 @@ The single command for both remote-asking channels (it replaced the old `/remote
 ```
 /rpiv-ask-user-question                   → usage + combined status of both channels
 /rpiv-ask-user-question status            → same
-/rpiv-ask-user-question remote on         → enable Feishu remote (errors if credentials are missing)
+/rpiv-ask-user-question remote on         → enable Feishu remote (errors if no receiver is configured)
 /rpiv-ask-user-question remote off        → disable
-/rpiv-ask-user-question remote status     → Feishu mode, local fallback, wait timeout, credentials, receivers
-/rpiv-ask-user-question prd on            → enable session-level ask-prd (Telegram; errors if tg credentials are missing)
+/rpiv-ask-user-question remote status     → Feishu mode, local fallback, wait timeout, receivers
+/rpiv-ask-user-question prd on            → enable session-level ask-prd (Telegram; errors if chatId/userId are missing)
 /rpiv-ask-user-question prd off           → disable
 /rpiv-ask-user-question prd status        → ask-prd state, tg wait timeout, tg credentials
 ```
@@ -189,22 +187,21 @@ defaults, never to an error.
 every questionnaire is sent by a Telegram bot to a chat and @-mentions a specified user,
 and **all Feishu logic is skipped** (both the `remote` primary mode and the local-timeout
 fallback to Feishu). Only the configured @-user's replies/button clicks count as answers.
+The bot token (and any HTTP(S) proxy) live in the **pi-channel** plugin config; this
+package only names the target chat and the @-user.
 
 | Field | What it does | Default |
 | --- | --- | --- |
-| `tg.botToken` | Telegram bot token (from @BotFather). | — |
 | `tg.chatId` | Target chat id (group/supergroup ids are negative, kept as a string). The bot and the @-user must be members. | — |
 | `tg.userId` | The @-mentioned user's numeric id; **only** this user's replies/button clicks are accepted. | — |
 | `tg.username` | Optional public username (e.g. `"@alice"`) used for the visible @ mention. | absent → `@user(<id>)` |
 | `tg.useCards` | Send questions as inline-keyboard cards (one button per option, **no Cancel — ask-prd cannot be cancelled**); clicking answers immediately, **removes the buttons** and appends a footer line with the selection (e.g. `✅ 已选择：选项A`) to the card text (a ✓ toast also confirms). Cancel words in text replies are ignored. Multi-select still takes a text reply (`1,2`). Card sends fall back to plain text. | `true` |
 | `tg.timeoutMs` | How long to wait for the @-user's reply per question. **Independent of the Feishu `timeoutMs`** — Telegram messages are not expected to be answered quickly. On timeout the unanswered questions are re-asked in the main conversation. | `1800000` (30 min) |
-| `tg.proxy` | Optional HTTP(S) proxy (e.g. `"http://127.0.0.1:6152"`). Falls back to `HTTPS_PROXY`/`HTTP_PROXY` env, then the macOS system proxy (`scutil`), then a direct connection. Needed where Telegram requires a proxy (Node's global fetch cannot use the system proxy). | auto |
 
 A bot in **privacy mode** only receives @-mentions, replies to its own messages, and
 commands in a group — plain-text replies from the @-user would be missed. To let the
 @-user answer with any text, disable Group Privacy for the bot (BotFather → Bot Settings →
-Group Privacy → Turn off). The bot token must not be polled by any other process, or
-`getUpdates` fails with 409.
+Group Privacy → Turn off).
 
 
 ## Environment variables

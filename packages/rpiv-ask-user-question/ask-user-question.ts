@@ -8,7 +8,12 @@ import {
 	type AskUserPromptEventPayload,
 } from "./events.js";
 import { isAskPrdActive } from "./remote/ask-prd-state.js";
-import { classifyRemoteError, createFeishuTransport } from "./remote/feishu-channel.js";
+import {
+	classifyRemoteError,
+	createFeishuTransport,
+	createTgTransport,
+	type EventsLike,
+} from "./remote/channel-transport.js";
 import {
 	getLocalTimeoutMs,
 	isTgConfigured,
@@ -17,7 +22,6 @@ import {
 	shouldUseRemote,
 } from "./remote/remote-config.js";
 import { type RemoteOutcome, type RemoteQuestion, runRemoteQuestionnaire } from "./remote/remote-questionnaire.js";
-import { createTgTransport } from "./remote/tg-channel.js";
 import { runTgQuestionnaire } from "./remote/tg-questionnaire.js";
 // Static import is fine — rpc-fallback pulls only types + the i18n bridge,
 // none of the ~560ms TUI render graph that QuestionnaireSession lazy-loads.
@@ -67,11 +71,11 @@ const ERROR_NO_UI = "Error: UI not available (running in non-interactive mode)";
 const ERROR_NO_CUSTOM_UI =
 	"Error: this client cannot render the questionnaire (custom UI is unavailable, e.g. RPC/ACP hosts such as Zed or Paseo). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
 
-const ERROR_REMOTE_CONNECT_FAILED =
-	"Error: the Feishu remote connection failed (check remote.feishu credentials in ~/.config/rpiv-ask-user-question/config.json and the app's permissions). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
+const ERROR_REMOTE_CHANNEL_FAILED =
+	"Error: the Feishu remote channel is unavailable (check remote.feishu.receivers in ~/.config/rpiv-ask-user-question/config.json and that the pi-channel plugin is installed with working Feishu credentials). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 
-const ERROR_TG_CONNECT_FAILED =
-	"Error: the Telegram remote connection failed (check remote.tg credentials in ~/.config/rpiv-ask-user-question/config.json, that the bot is in the chat, and that the bot token has no other poller). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
+const ERROR_TG_CHANNEL_FAILED =
+	"Error: the Telegram remote channel is unavailable (check remote.tg.chatId/userId in ~/.config/rpiv-ask-user-question/config.json and that the pi-channel plugin is installed with a working bot token). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 const ERROR_SESSION_LOAD_FAILED =
 	"Error: the questionnaire UI failed to load — the host's installed dependencies were likely replaced or removed on disk while Pi was running (e.g. a package-manager install touched the store). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, and tell the user that restoring this tool requires repairing the install if needed and restarting Pi.";
 
@@ -200,6 +204,7 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 						);
 					}
 					const outcome = await runTgQuestionnaireWithConnect(
+						pi.events,
 						ctx,
 						typed.questions.map((q, i) => ({ question: q, index: i })),
 						remoteCfg,
@@ -226,6 +231,7 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 				emitAskUserBlockedEvent(pi, true);
 				try {
 					const outcome = await runRemoteQuestionnaireWithConnect(
+						pi.events,
 						ctx,
 						typed.questions.map((q, i) => ({ question: q, index: i })),
 						remoteCfg,
@@ -266,17 +272,19 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 }
 
 /**
- * Connect a Feishu transport and run the remote questionnaire. Connect/send
- * failures are classified and surfaced as an LLM-facing failure envelope —
- * the user never saw the questions, so this is NOT a decline.
+ * Run the Feishu questionnaire over the pi-channel event bus. Send failures
+ * (including a missing plugin / result timeout) are classified and surfaced as
+ * an LLM-facing failure envelope — the user never saw the questions, so this
+ * is NOT a decline.
  */
 async function runRemoteQuestionnaireWithConnect(
+	events: EventsLike,
 	ctx: { ui: { notify?: (msg: string, level: "info" | "error") => void } },
 	questions: RemoteQuestion[],
 	cfg: RemoteConfig,
 ): Promise<RemoteOutcome> {
 	try {
-		const transport = await createFeishuTransport(cfg.feishu);
+		const transport = await createFeishuTransport(cfg.feishu, { events });
 		try {
 			return await runRemoteQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
 		} finally {
@@ -286,26 +294,26 @@ async function runRemoteQuestionnaireWithConnect(
 		const { code, message } = classifyRemoteError(err);
 		return {
 			kind: "failed",
-			message: `${ERROR_REMOTE_CONNECT_FAILED} (code ${code} — ${message})`,
+			message: `${ERROR_REMOTE_CHANNEL_FAILED} (code ${code} — ${message})`,
 			partialAnswers: [],
 		};
 	}
 }
 
 /**
- * Connect a Telegram transport (proxy-aware) and run the ask-prd questionnaire.
- * Connect failures are classified and surfaced as an LLM-facing failure envelope —
- * the user never saw the questions, so this is NOT a decline.
+ * Run the ask-prd Telegram questionnaire over the pi-channel event bus. Send
+ * failures (including a missing plugin / result timeout) are classified and
+ * surfaced as an LLM-facing failure envelope — the user never saw the questions,
+ * so this is NOT a decline.
  */
 async function runTgQuestionnaireWithConnect(
+	events: EventsLike,
 	ctx: { ui: { notify?: (msg: string, level: "info" | "error") => void } },
 	questions: RemoteQuestion[],
 	cfg: RemoteConfig,
 ): Promise<RemoteOutcome> {
 	try {
-		const transport = createTgTransport(cfg.tg, {
-			log: (msg) => ctx.ui.notify?.(`[tg] ${msg}`, "info"),
-		});
+		const transport = createTgTransport(cfg.tg, { events });
 		try {
 			return await runTgQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
 		} finally {
@@ -315,7 +323,7 @@ async function runTgQuestionnaireWithConnect(
 		const { code, message } = classifyRemoteError(err);
 		return {
 			kind: "failed",
-			message: `${ERROR_TG_CONNECT_FAILED} (code ${code} — ${message})`,
+			message: `${ERROR_TG_CHANNEL_FAILED} (code ${code} — ${message})`,
 			partialAnswers: [],
 		};
 	}
@@ -521,7 +529,7 @@ async function runLocalQuestionnaire(
 					t("remote.fallback_notify", "Local wait timed out — remaining questions sent to Feishu"),
 					"info",
 				);
-				const outcome = await runRemoteQuestionnaireWithConnect(ctx, remaining, remoteCfg);
+				const outcome = await runRemoteQuestionnaireWithConnect(pi.events, ctx, remaining, remoteCfg);
 				if (outcome.kind === "answered") {
 					return {
 						kind: "answered",

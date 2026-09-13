@@ -3,8 +3,8 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.js";
+import type { TgTransport } from "./remote/channel-transport.js";
 import type { RemoteOutcome } from "./remote/remote-questionnaire.js";
-import type { TgTransport } from "./remote/tg-channel.js";
 import type { QuestionnaireResult, QuestionParams } from "./tool/types.js";
 
 /**
@@ -31,7 +31,10 @@ const {
 	loadConfigMock: vi.fn(),
 }));
 
-vi.mock("./remote/tg-channel.js", () => ({ createTgTransport: createTgTransportMock }));
+vi.mock("./remote/channel-transport.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./remote/channel-transport.js")>();
+	return { ...actual, createTgTransport: createTgTransportMock, createFeishuTransport: createFeishuTransportMock };
+});
 vi.mock("./remote/tg-questionnaire.js", () => ({ runTgQuestionnaire: runTgQuestionnaireMock }));
 vi.mock("./remote/ask-prd-state.js", () => ({
 	isAskPrdActive: isAskPrdActiveMock,
@@ -41,10 +44,6 @@ vi.mock("./remote/ask-prd-state.js", () => ({
 vi.mock("./remote/remote-config.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./remote/remote-config.js")>();
 	return { ...actual, isTgConfigured: isTgConfiguredMock };
-});
-vi.mock("./remote/feishu-channel.js", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("./remote/feishu-channel.js")>();
-	return { ...actual, createFeishuTransport: createFeishuTransportMock };
 });
 vi.mock("./config.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./config.js")>();
@@ -89,19 +88,15 @@ function fullRemoteConfig(enabled: boolean) {
 		timeoutMs: 60_000,
 		cancelWords: ["取消", "cancel"],
 		feishu: {
-			appId: "cli_1",
-			appSecret: "secret",
 			useCards: false,
 			receivers: [{ type: "email", value: "me@example.com" }],
 		},
 		tg: {
-			botToken: "t",
 			chatId: "c",
 			userId: 7,
 			username: "@alice",
 			useCards: true,
 			timeoutMs: 1_800_000,
-			proxy: undefined,
 		},
 	};
 }

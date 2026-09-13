@@ -42,8 +42,6 @@ function fullConfig(): RemoteConfig {
 		timeoutMs: 60_000,
 		cancelWords: ["stop"],
 		feishu: {
-			appId: "cli_1",
-			appSecret: "secret",
 			receivers: [
 				{ type: "email", value: "me@example.com" },
 				{ type: "chat_id", value: "oc_1" },
@@ -70,8 +68,10 @@ describe("loadRemoteConfig", () => {
 		expect(cfg.localTimeoutMs).toBe(300_000);
 		expect(cfg.timeoutMs).toBe(60_000);
 		expect(cfg.cancelWords).toEqual(["stop"]);
-		expect(cfg.feishu.appId).toBe("cli_1");
-		expect(cfg.feishu.receivers).toHaveLength(2);
+		expect(cfg.feishu.receivers).toEqual([
+			{ type: "email", value: "me@example.com" },
+			{ type: "chat_id", value: "oc_1" },
+		]);
 	});
 
 	it("drops non-positive or non-finite timeout values back to defaults", () => {
@@ -115,22 +115,28 @@ describe("loadRemoteConfig", () => {
 });
 
 describe("isFeishuConfigured / shouldUseRemote", () => {
-	it("requires appId, appSecret and at least one receiver", () => {
+	it("requires at least one receiver", () => {
 		expect(isFeishuConfigured(fullConfig())).toBe(true);
-		expect(isFeishuConfigured(loadRemoteConfig({ feishu: { appId: "a", appSecret: "b" } }))).toBe(false);
-		expect(
-			isFeishuConfigured(loadRemoteConfig({ feishu: { appId: "a", receivers: [{ type: "email", value: "x" }] } })),
-		).toBe(false);
+		expect(isFeishuConfigured(loadRemoteConfig({ feishu: { receivers: [] } }))).toBe(false);
 	});
 
-	it("shouldUseRemote requires enabled AND configured credentials", () => {
+	it("ignores legacy feishu appId/appSecret", () => {
+		const cfg = loadRemoteConfig({
+			feishu: { appId: "a", appSecret: "b", receivers: [{ type: "email", value: "x" }] },
+		});
+		expect(cfg.feishu.receivers).toEqual([{ type: "email", value: "x" }]);
+		expect("appId" in cfg.feishu).toBe(false);
+		expect("appSecret" in cfg.feishu).toBe(false);
+	});
+
+	it("shouldUseRemote requires enabled AND at least one receiver", () => {
 		expect(shouldUseRemote(fullConfig())).toBe(true);
 		expect(shouldUseRemote(loadRemoteConfig({ enabled: true }))).toBe(false);
 		expect(
 			shouldUseRemote(
 				loadRemoteConfig({
 					enabled: false,
-					feishu: { appId: "a", appSecret: "b", receivers: [{ type: "email", value: "x" }] },
+					feishu: { receivers: [{ type: "email", value: "x" }] },
 				}),
 			),
 		).toBe(false);
@@ -138,7 +144,7 @@ describe("isFeishuConfigured / shouldUseRemote", () => {
 });
 
 describe("getLocalTimeoutMs", () => {
-	const creds = { feishu: { appId: "a", appSecret: "b", receivers: [{ type: "email", value: "x" }] } };
+	const creds = { feishu: { receivers: [{ type: "email", value: "x" }] } };
 
 	it("returns the configured threshold when credentials exist and remote is off", () => {
 		expect(getLocalTimeoutMs(loadRemoteConfig({ enabled: false, localTimeoutMs: 123, ...creds }))).toBe(123);
@@ -152,7 +158,7 @@ describe("getLocalTimeoutMs", () => {
 		expect(getLocalTimeoutMs(loadRemoteConfig({ enabled: false, ...creds }))).toBeUndefined();
 	});
 
-	it("returns undefined when credentials are missing", () => {
+	it("returns undefined when no receiver is configured", () => {
 		expect(getLocalTimeoutMs(loadRemoteConfig({ enabled: false, localTimeoutMs: 123 }))).toBeUndefined();
 	});
 });
@@ -208,7 +214,7 @@ describe("setRemoteEnabled", () => {
 describe("loadRemoteConfig tg", () => {
 	it("defaults tg to unconfigured", () => {
 		const cfg = loadRemoteConfig({});
-		expect(cfg.tg.botToken).toBe("");
+		expect("botToken" in cfg.tg).toBe(false);
 		expect(cfg.tg.chatId).toBe("");
 		expect(cfg.tg.userId).toBe(0);
 		expect(cfg.tg.username).toBeUndefined();
@@ -219,7 +225,6 @@ describe("loadRemoteConfig tg", () => {
 	it("parses valid tg config", () => {
 		const cfg = loadRemoteConfig({
 			tg: {
-				botToken: "123:abc",
 				chatId: "-1001",
 				userId: 42,
 				username: "@alice",
@@ -227,7 +232,7 @@ describe("loadRemoteConfig tg", () => {
 				timeoutMs: 99_000,
 			},
 		});
-		expect(cfg.tg.botToken).toBe("123:abc");
+		expect("botToken" in cfg.tg).toBe(false);
 		expect(cfg.tg.chatId).toBe("-1001");
 		expect(cfg.tg.userId).toBe(42);
 		expect(cfg.tg.username).toBe("@alice");
@@ -237,9 +242,18 @@ describe("loadRemoteConfig tg", () => {
 
 	it("drops invalid tg fields back to defaults", () => {
 		const cfg = loadRemoteConfig({
-			tg: { botToken: 3, chatId: "", userId: -1, username: "  ", useCards: "yes", timeoutMs: 0 },
+			tg: {
+				botToken: "legacy",
+				proxy: "http://legacy",
+				chatId: "",
+				userId: -1,
+				username: "  ",
+				useCards: "yes",
+				timeoutMs: 0,
+			},
 		});
-		expect(cfg.tg.botToken).toBe("");
+		expect("botToken" in cfg.tg).toBe(false);
+		expect("proxy" in cfg.tg).toBe(false);
 		expect(cfg.tg.chatId).toBe("");
 		expect(cfg.tg.userId).toBe(0);
 		expect(cfg.tg.username).toBeUndefined();
@@ -249,15 +263,14 @@ describe("loadRemoteConfig tg", () => {
 
 	it("treats non-object tg as defaults", () => {
 		expect(loadRemoteConfig({ tg: "x" }).tg.userId).toBe(0);
-		expect(loadRemoteConfig({ tg: null }).tg.botToken).toBe("");
+		expect(loadRemoteConfig({ tg: null }).tg.chatId).toBe("");
 	});
 });
 
 describe("isTgConfigured", () => {
-	it("requires botToken, chatId and a positive userId", () => {
-		expect(isTgConfigured(loadRemoteConfig({ tg: { botToken: "t", chatId: "c", userId: 1 } }))).toBe(true);
-		expect(isTgConfigured(loadRemoteConfig({ tg: { chatId: "c", userId: 1 } }))).toBe(false);
-		expect(isTgConfigured(loadRemoteConfig({ tg: { botToken: "t", userId: 1 } }))).toBe(false);
-		expect(isTgConfigured(loadRemoteConfig({ tg: { botToken: "t", chatId: "c" } }))).toBe(false);
+	it("requires chatId and a positive userId (bot token lives in pi-channel)", () => {
+		expect(isTgConfigured(loadRemoteConfig({ tg: { chatId: "c", userId: 1 } }))).toBe(true);
+		expect(isTgConfigured(loadRemoteConfig({ tg: { chatId: "c" } }))).toBe(false);
+		expect(isTgConfigured(loadRemoteConfig({ tg: { userId: 1 } }))).toBe(false);
 	});
 });

@@ -133,11 +133,14 @@ function parseIndexToken(token: string, count: number): number | null {
  * Button-value payloads embedded in question cards. `q` pins the question
  * index so a click on a stale card (from an earlier question) is ignored;
  * `o` is the 1-based option index for single-select, `c: "1"` marks cancel.
+ * `ackText` is the toast the pi-channel plugin shows for the click (feishu
+ * 3s callback response / telegram answerCallbackQuery).
  */
 export interface CardButtonValue {
 	q: string;
 	o?: string;
 	c?: string;
+	ackText?: string;
 }
 
 export const CARD_CANCEL_VALUE: CardButtonValue = { q: "0", c: "1" };
@@ -221,7 +224,7 @@ export function buildQuestionCard(
 	const cancelButton = buttonElement(
 		answered && !cancelled ? "取消" : cancelled ? "已取消" : "取消",
 		"danger",
-		{ q: String(questionIndex), c: "1" },
+		{ q: String(questionIndex), c: "1", ackText: "已取消" },
 		answered,
 	);
 
@@ -242,7 +245,7 @@ export function buildQuestionCard(
 				return buttonElement(
 					isSelected ? `${CARD_SELECTED_PREFIX}${o.label}` : o.label,
 					isSelected ? "primary" : "default",
-					{ q: String(questionIndex), o: String(optionNum) },
+					{ q: String(questionIndex), o: String(optionNum), ackText: "已选择" },
 					answered && !isSelected,
 				);
 			});

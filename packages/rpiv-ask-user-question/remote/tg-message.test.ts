@@ -11,13 +11,11 @@ import {
 
 function tgCfg(over: Partial<TgRemoteConfig> = {}): TgRemoteConfig {
 	return {
-		botToken: "t",
 		chatId: "c",
 		userId: 42,
 		username: undefined,
 		useCards: true,
 		timeoutMs: 1_800_000,
-		proxy: undefined,
 		...over,
 	};
 }
@@ -65,12 +63,12 @@ describe("buildTgKeyboard", () => {
 		expect(rows).toHaveLength(2); // [A,B,C] [D] — no cancel row
 		expect(rows[0].map((b) => b.text)).toEqual(["A", "B", "C"]);
 		expect(rows[0].map((b) => b.value)).toEqual([
-			{ q: "1", o: "1" },
-			{ q: "1", o: "2" },
-			{ q: "1", o: "3" },
+			{ q: "1", o: "1", ackText: "已选择" },
+			{ q: "1", o: "2", ackText: "已选择" },
+			{ q: "1", o: "3", ackText: "已选择" },
 		]);
 		expect(rows[1].map((b) => b.text)).toEqual(["D"]);
-		expect(rows[1][0].value).toEqual({ q: "1", o: "4" });
+		expect(rows[1][0].value).toEqual({ q: "1", o: "4", ackText: "已选择" });
 	});
 
 	it("multi-select: no buttons at all (text reply 1,2)", () => {

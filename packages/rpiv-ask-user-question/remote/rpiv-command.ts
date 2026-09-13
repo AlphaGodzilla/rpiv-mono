@@ -36,7 +36,9 @@ function formatRemoteStatus(cfg: RemoteConfig, changedTo?: boolean): string {
 	const change =
 		changedTo === undefined ? "" : changedTo ? " → enabled (questions go to Feishu)" : " → disabled (local dialog)";
 	const fallback = cfg.localTimeoutMs === undefined ? "disabled" : `${Math.round(cfg.localTimeoutMs / 1000)}s`;
-	const creds = isFeishuConfigured(cfg) ? "OK" : "MISSING (configure feishu.appId/appSecret/receivers)";
+	const creds = isFeishuConfigured(cfg)
+		? "OK"
+		: "MISSING (add feishu.receivers; credentials live in the pi-channel plugin)";
 	const receivers =
 		cfg.feishu.receivers.length > 0
 			? ` ${cfg.feishu.receivers.length} (${cfg.feishu.receivers.map((r) => r.type).join(", ")})`
@@ -55,7 +57,9 @@ function formatPrdStatus(active: boolean, changedTo?: boolean): string {
 
 /** Combined one-shot status for bare / `status` invocation. */
 function combinedStatus(cfg: RemoteConfig, sessionId: string | undefined): string {
-	const tg = isTgConfigured(cfg) ? "OK" : "MISSING (configure tg.botToken/chatId/userId)";
+	const tg = isTgConfigured(cfg)
+		? "OK"
+		: "MISSING (configure tg.chatId/userId; bot token lives in the pi-channel plugin)";
 	const wait = `${Math.round(cfg.tg.timeoutMs / 1000)}s`;
 	return `${USAGE}\n${formatRemoteStatus(cfg)}\n${formatPrdStatus(isAskPrdActive(sessionId))} · tg wait timeout: ${wait} · Credentials: ${tg}`;
 }
@@ -71,7 +75,7 @@ async function handleRemote(ctx: ExtensionCommandContext, cfg: RemoteConfig, act
 	} else if (action === "on") {
 		if (!isFeishuConfigured(cfg)) {
 			ctx.ui.notify(
-				"Cannot enable remote mode: Feishu credentials are missing. Edit ~/.config/rpiv-ask-user-question/config.json and add remote.feishu.appId / appSecret / receivers.",
+				"Cannot enable remote mode: Feishu receivers are missing. Edit ~/.config/rpiv-ask-user-question/config.json and add remote.feishu.receivers (the app credentials live in the pi-channel plugin).",
 				"error",
 			);
 			return;
@@ -113,7 +117,7 @@ async function handlePrd(
 	} else if (action === "on") {
 		if (!isTgConfigured(cfg)) {
 			ctx.ui.notify(
-				"Cannot enable ask-prd: Telegram credentials are missing. Edit ~/.config/rpiv-ask-user-question/config.json and add remote.tg.botToken / chatId / userId.",
+				"Cannot enable ask-prd: Telegram chatId/userId are missing. Edit ~/.config/rpiv-ask-user-question/config.json and add remote.tg.chatId / userId (the bot token lives in the pi-channel plugin).",
 				"error",
 			);
 			return;

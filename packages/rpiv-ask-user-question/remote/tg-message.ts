@@ -11,12 +11,17 @@ import type { TgRemoteConfig } from "./remote-config.js";
  * the shared `parseReply`/`isCancelWord` from message-format.js.
  */
 
-/** callback_data payloads — `q` pins the question index, `o` the option, `c` cancel, `d` a locked/done marker. */
+/**
+ * callback_data payloads — `q` pins the question index, `o` the option, `c` cancel,
+ * `d` a locked/done marker, `ackText` the toast the plugin shows on click
+ * (answerCallbackQuery).
+ */
 export interface TgButtonValue {
 	q: string;
 	o?: string;
 	c?: string;
 	d?: string;
+	ackText?: string;
 }
 
 const TG_OPTIONS_PER_ROW = 3;
@@ -54,7 +59,7 @@ export function buildTgKeyboard(q: QuestionData, questionIndex: number): object 
 			rows.push(
 				q.options.slice(start, start + TG_OPTIONS_PER_ROW).map((o, i) => {
 					const optionNum = start + i + 1;
-					return button(o.label, { q: String(questionIndex), o: String(optionNum) });
+					return button(o.label, { q: String(questionIndex), o: String(optionNum), ackText: "已选择" });
 				}),
 			);
 		}

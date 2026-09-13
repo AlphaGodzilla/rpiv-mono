@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeQuestion } from "../test-fixtures.js";
+import type { TgReply, TgTransport } from "./channel-transport.js";
 import type { RemoteConfig } from "./remote-config.js";
-import type { TgReply, TgTransport } from "./tg-channel.js";
 import { runTgQuestionnaire } from "./tg-questionnaire.js";
 
 function remoteConfig(over: Partial<RemoteConfig> = {}): RemoteConfig {
@@ -10,15 +10,13 @@ function remoteConfig(over: Partial<RemoteConfig> = {}): RemoteConfig {
 		localTimeoutMs: undefined,
 		timeoutMs: 600_000,
 		cancelWords: ["取消", "cancel"],
-		feishu: { appId: "", appSecret: "", receivers: [], useCards: true },
+		feishu: { receivers: [], useCards: true },
 		tg: {
-			botToken: "t",
 			chatId: "c",
 			userId: 1,
 			username: undefined,
 			useCards: true,
 			timeoutMs: 1_000,
-			proxy: undefined,
 		},
 		...over,
 	};

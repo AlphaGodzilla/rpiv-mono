@@ -19,8 +19,6 @@ vi.mock("../config.js", () => ({
 			timeoutMs: 600_000,
 			cancelWords: ["取消", "cancel"],
 			feishu: {
-				appId: "cli_1",
-				appSecret: "secret",
 				useCards: true,
 				receivers: [
 					{ type: "email", value: "me@example.com" },
@@ -28,13 +26,11 @@ vi.mock("../config.js", () => ({
 				],
 			},
 			tg: {
-				botToken: "t",
 				chatId: "c",
 				userId: 7,
 				username: "@alice",
 				useCards: true,
 				timeoutMs: 1_800_000,
-				proxy: undefined,
 			},
 		},
 	})),
@@ -51,8 +47,6 @@ const DEFAULT_CONFIG: RemoteConfig = {
 	timeoutMs: 600_000,
 	cancelWords: ["取消", "cancel"],
 	feishu: {
-		appId: "cli_1",
-		appSecret: "secret",
 		useCards: true,
 		receivers: [
 			{ type: "email", value: "me@example.com" },
@@ -60,13 +54,11 @@ const DEFAULT_CONFIG: RemoteConfig = {
 		],
 	},
 	tg: {
-		botToken: "t",
 		chatId: "c",
 		userId: 7,
 		username: "@alice",
 		useCards: true,
 		timeoutMs: 1_800_000,
-		proxy: undefined,
 	},
 };
 
@@ -179,11 +171,11 @@ describe("registerRpivCommand", () => {
 
 		it("on without feishu credentials errors and does not write", async () => {
 			vi.mocked(loadConfig).mockReturnValue({
-				remote: { ...DEFAULT_CONFIG, feishu: { appId: "", appSecret: "", receivers: [], useCards: true } },
+				remote: { ...DEFAULT_CONFIG, feishu: { receivers: [], useCards: true } },
 			});
 			const ctx = makeCtx();
 			await command.handler("remote on", ctx);
-			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("credentials are missing"), "error");
+			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("receivers are missing"), "error");
 			expect(setRemoteEnabledMock).not.toHaveBeenCalled();
 		});
 
@@ -216,19 +208,17 @@ describe("registerRpivCommand", () => {
 				remote: {
 					...DEFAULT_CONFIG,
 					tg: {
-						botToken: "",
 						chatId: "",
 						userId: 0,
 						username: undefined,
 						useCards: true,
 						timeoutMs: 1_800_000,
-						proxy: undefined,
 					},
 				},
 			});
 			const ctx = makeCtx();
 			await command.handler("prd on", ctx);
-			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("credentials are missing"), "error");
+			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("chatId/userId are missing"), "error");
 			expect(isAskPrdActive("session-1")).toBe(false);
 		});
 

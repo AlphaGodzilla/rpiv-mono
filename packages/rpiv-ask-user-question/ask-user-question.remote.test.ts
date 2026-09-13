@@ -3,7 +3,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.js";
-import type { RemoteTransport } from "./remote/feishu-channel.js";
+import type { RemoteTransport } from "./remote/channel-transport.js";
 import type { QuestionnaireResult, QuestionParams } from "./tool/types.js";
 
 /**
@@ -18,8 +18,8 @@ const { createFeishuTransportMock, loadConfigMock } = vi.hoisted(() => ({
 	loadConfigMock: vi.fn(),
 }));
 
-vi.mock("./remote/feishu-channel.js", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("./remote/feishu-channel.js")>();
+vi.mock("./remote/channel-transport.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./remote/channel-transport.js")>();
 	return { ...actual, createFeishuTransport: createFeishuTransportMock };
 });
 
@@ -75,8 +75,6 @@ function fullRemoteConfig(enabled: boolean, localTimeoutMs?: number) {
 		timeoutMs: 60_000,
 		cancelWords: ["取消", "cancel"],
 		feishu: {
-			appId: "cli_1",
-			appSecret: "secret",
 			useCards: false,
 			receivers: [{ type: "email", value: "me@example.com" }],
 		},
@@ -419,12 +417,12 @@ describe("ask_user_question — local timeout fallback", () => {
 		expect(content).toContain('"Which library?"="A"');
 	});
 
-	it("does not start a local timeout when credentials are missing", async () => {
+	it("does not start a local timeout when no receiver is configured", async () => {
 		loadConfigMock.mockReturnValue({
 			remote: {
 				enabled: false,
 				localTimeoutMs: 5_000,
-				feishu: { appId: "", appSecret: "", receivers: [] },
+				feishu: { receivers: [] },
 			},
 		});
 		const h = makeHarness();

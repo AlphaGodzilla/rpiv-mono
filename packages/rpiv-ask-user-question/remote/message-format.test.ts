@@ -235,8 +235,8 @@ describe("buildQuestionCard", () => {
 			.flatMap((e) => e.columns?.map((c) => c.elements[0]) ?? []);
 		expect(buttons.map((b) => b.text.content)).toEqual(["A", "B", "取消"]);
 		const values = buttons.map((b) => b.behaviors?.[0]?.value);
-		expect(values[0]).toEqual({ q: "0", o: "1" });
-		expect(values[2]).toEqual({ q: "0", c: "1" });
+		expect(values[0]).toEqual({ q: "0", o: "1", ackText: "已选择" });
+		expect(values[2]).toEqual({ q: "0", c: "1", ackText: "已取消" });
 	});
 
 	it("marks the chosen button with a checkmark and disables every other button when answered", () => {

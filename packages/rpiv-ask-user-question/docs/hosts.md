@@ -9,13 +9,13 @@ render at all.
 | --- | --- | --- |
 | Interactive terminal | `ask_user_question` in its tool list | The full tabbed TUI overlay |
 | RPC / ACP host (VS Code pendant, Zed, Paseo) | `ask_user_question` in its tool list | A sequence of the host's own native select and input dialogs |
-| Feishu remote mode (`remote.enabled`, credentials complete) | `ask_user_question` in its tool list | One Feishu message per question; you reply in Feishu |
+| Feishu remote mode (`remote.enabled`, receiver configured) | `ask_user_question` in its tool list | One Feishu message per question; you reply in Feishu |
 | Non-interactive run (no UI) | Nothing — the tool is removed | Nothing |
 
 ## Feishu remote mode
 
-When `remote.enabled` is `true` and the Feishu credentials are complete, every
-questionnaire skips the terminal entirely: each question is sent as one message to every
+When `remote.enabled` is `true`, a Feishu receiver is configured and the pi-channel plugin
+is connected, every questionnaire skips the terminal entirely: each question is sent as one message to every
 configured receiver, and the first matching reply is parsed back into the same result
 envelope the TUI produces. This works identically in interactive terminals and RPC/ACP
 hosts — anything with `ctx.hasUI` — because the dialog never opens. Non-interactive runs
@@ -26,7 +26,8 @@ Reception rules:
 - **Private chats**: any text message answers the pending question (only people who
   received the question know it exists). Stickers, images and other non-text messages are
   ignored with a hint.
-- **Group chats**: the bot reacts only to messages that @ it (`requireMention` policy).
+- **Group chats**: only messages that @ the bot reach the consumer (the pi-channel
+  plugin's `requireMention` policy — configure it there).
 - A reply matching a `cancelWords` entry aborts the whole questionnaire (`cancelled: true`),
   mirroring `Esc`.
 - Waiting longer than `timeoutMs` per question also cancels — a user who does not answer
@@ -42,25 +43,19 @@ button gains a ✓, every other button is disabled. Multi-select questions rende
 options in the card but keep the free-text interaction (`1,2` reply) since a single
 click cannot express a selection list; the card still carries a Cancel button.
 
-Three long-connection callbacks details worth knowing:
-
-1. **A callback response is mandatory.** The platform expects a response within 3
-   seconds or the client shows "回调响应超时". The SDK's Channel layer discards the
-   listener's return value, so a response (`{ toast }`) is injected at the WebSocket
-   dispatcher level.
-2. **The response body cannot carry the updated card** — the platform accepts only
-   V1 card bodies there, while our cards are V2. Card updates therefore go through
-   the update API instead.
-3. **Closing the connection right after answering drops the pending ack.** `close()`
-   waits ~400 ms to let the last ack frame flush before disconnecting.
+Card-callback acks are handled by the pi-channel plugin: every button value carries an
+`ackText` toast ("已选择"/"已取消") and the plugin answers the platform within the 3-second
+window (Feishu card callback response / Telegram `answerCallbackQuery`). Locking an
+answered card is a normal bus update (`update.messageId`), because a Feishu callback
+response cannot carry a V2 card body.
 
 Card send failures fall back to plain text automatically; `feishu.useCards: false`
 disables cards entirely.
 
-Failure handling: a connection or send failure returns an envelope telling the model the
-user never saw the questions and to ask them as plain chat text — explicitly not a
-decline. The message names the `LarkChannelError.code` (`permission_denied` for bad
-credentials, `not_connected`/`send_timeout` for network trouble) to guide debugging.
+Failure handling: a send failure returns an envelope telling the model the user never saw
+the questions and to ask them as plain chat text — explicitly not a decline. The message
+names the error code the pi-channel plugin reported (`not_configured`, `permission_denied`,
+…), or `timeout` when the plugin is absent or did not answer the request in time.
 
 ### Local-timeout fallback
 
