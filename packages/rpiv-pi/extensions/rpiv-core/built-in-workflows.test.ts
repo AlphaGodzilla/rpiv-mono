@@ -8279,6 +8279,58 @@ describe("build edges — implement-scope-check sits between implement and valid
 		expect(v).toBe(f + 1);
 	});
 
+	it("build's code (elaborate) fanout is dep-gated like implement: phase ids + files-overlap deps, retryHaltedUnits kept", async () => {
+		// Elaborate lanes probe the ONE shared working tree (apply → check → revert
+		// their own write-scope). Two lanes whose `files:` overlap cannot both
+		// revert byte-identically — a lane that snapshots a co-owned file while a
+		// sibling's probe is live restores the sibling's transient blocks after the
+		// sibling reverted them (run 2026-09-12_14-29-13-5eb9). So the code fanout
+		// carries the same `id`/`deps` edges as IMPLEMENT_DAG_FANOUT.
+		const loop = findWorkflow("build").stages.code?.loop;
+		if (loop?.kind !== "fanout") throw new Error("build code stage has no fanout loop");
+		expect(loop.retryHaltedUnits).toBe(1);
+		expect(loop.concurrency).toBeUndefined();
+		const dir = mkdtempSync(join(tmpdir(), "rpiv-build-code-dag-"));
+		try {
+			const rel = ".rpiv/artifacts/plans/code-dag.md";
+			mkdirSync(join(dir, ".rpiv/artifacts/plans"), { recursive: true });
+			writeFileSync(
+				join(dir, rel),
+				[
+					"---",
+					"status: ready",
+					"phase_count: 3",
+					"phases:",
+					"  - { n: 1, title: P1, files: [packages/a/one.ts] }",
+					"  - { n: 2, title: P2, files: [packages/a/X.ts, packages/a/T.ts] }",
+					"  - { n: 3, title: P3, files: [packages/a/T.ts] }",
+					"---",
+					"# Plan",
+					"## Phase 1: P1",
+					"## Phase 2: P2",
+					"## Phase 3: P3",
+					"",
+				].join("\n"),
+			);
+			const units = await loop.units({
+				cwd: dir,
+				artifact: undefined,
+				state: {
+					named: { plans: [{ artifacts: [{ handle: fsHandle(rel) }], data: undefined, kind: "", meta: {} }] },
+				} as unknown as RunView,
+			});
+			expect(units.map((u) => [u.id, u.deps ?? []])).toEqual([
+				["phase-1", []],
+				["phase-2", []],
+				["phase-3", ["phase-2"]], // co-owns T.ts with phase 2 → serialized behind it
+			]);
+			expect(units[0]?.prompt).toBe(`${rel} Phase 1: P1`);
+			expect(units[0]?.label).toBe("phase 1/3");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("build's implement references IMPLEMENT_DAG_FANOUT, no longer carries concurrency (unpinned)", () => {
 		const loop = findWorkflow("build").stages.implement?.loop;
 		// Phase 2 rewired build to IMPLEMENT_DAG_FANOUT; Phase 3 deletes concurrency:1.

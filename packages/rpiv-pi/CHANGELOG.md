@@ -7,6 +7,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `code` (elaborate) fanout is dep-gated by `files:` overlap, like `implement`.** Elaborate lanes self-check by probing the one shared working tree (apply → check → `git restore` their own write-scope), which only reverts byte-identically when no concurrent sibling owns a path in that scope. `ELABORATE_PHASE_FANOUT` now emits the same `phase-<n>` ids and overlap-derived `deps` as `IMPLEMENT_DAG_FANOUT` through a shared `dagPhaseUnits` builder, so co-owning phases run in dependency waves and file-disjoint phases still fan out concurrently. Without it, a lane that snapshotted a co-owned file while a sibling's probe was live copied the sibling's transient blocks back after the sibling had reverted them, and the residue broke the test target for every implement lane (run 2026-09-12_14-29-13-5eb9, phase 5's `DescriptorGeometry` tests resurrected by phases 3 and 2). The elaborate skill's self-check now also forbids snapshot/copy-back reverts outright.
+
 ## [2.10.0] - 2026-09-12
 
 ### Added
