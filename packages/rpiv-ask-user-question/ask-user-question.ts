@@ -444,6 +444,13 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 				}
 			}
 
+			// Remote credentials + `localTimeoutMs` together enable the local-first flow: ask
+			// here, then hand the unanswered questions to Feishu after the timeout. That
+			// path lives in runLocalQuestionnaire; without a local timeout the upstream
+			// local path below (RPC walker + QuestionnaireSession) is the one that runs.
+			if (getLocalTimeoutMs(remoteCfg) !== undefined) {
+				return localOutcomeEnvelope(await runLocalQuestionnaire(pi, ctx, typed, remoteCfg), typed);
+			}
 			// RPC hosts (VSCode pendant, ACP clients like Zed/Paseo — issue #78):
 			// ui.custom() cannot render there, but the select/input dialog
 			// sub-protocol works. Hosts that advertise ctx.mode (pi ≥0.79) route to
