@@ -214,6 +214,32 @@ describe("ask_user_question — Feishu remote as primary mode", () => {
 		expect(content).toContain('"Which library?"="A"');
 	});
 
+	it("keeps an in-flight remote wait alive when remote mode is switched off mid-wait", async () => {
+		const transport = makeTransport();
+		// `/rpiv-ask-user-question remote off` (or `prd off`) only ever affects the NEXT
+		// ask: a questionnaire that is already waiting on the card holds the config
+		// snapshot it started with, so the reply to that wait must still be accepted
+		// and the flow must not fall back to the local dialog half-way through.
+		transport.waitForReply = vi.fn<RemoteTransport["waitForReply"]>(async () => {
+			loadConfigMock.mockReturnValue({ remote: fullRemoteConfig(false) });
+			return {
+				text: "1",
+				chatId: "oc_x",
+				chatType: "p2p" as const,
+				senderId: "ou_1",
+				messageId: "om_1",
+			};
+		});
+		createFeishuTransportMock.mockResolvedValue(transport);
+		const h = makeHarness();
+
+		const result = await h.execute("t1", makeParams(), undefined, undefined, h.ctx);
+
+		const content = (result as { content: { text: string }[] }).content[0].text;
+		expect(content).toContain("User has answered your questions");
+		expect(content).toContain('"Which library?"="A"');
+		expect(h.ctx.ui.custom).not.toHaveBeenCalled();
+	});
 	it("emits blocked events around the remote wait", async () => {
 		const transport = makeTransport();
 		createFeishuTransportMock.mockResolvedValue(transport);
