@@ -52,10 +52,14 @@ response cannot carry a V2 card body.
 Card send failures fall back to plain text automatically; `feishu.useCards: false`
 disables cards entirely.
 
-Failure handling: a send failure returns an envelope telling the model the user never saw
-the questions and to ask them as plain chat text — explicitly not a decline. The message
-names the error code the pi-channel plugin reported (`not_configured`, `permission_denied`,
-…), or `timeout` when the plugin is absent or did not answer the request in time.
+Before the first send the channel is probed once (1.5 s): when the pi-channel plugin is
+not loaded (`plugin_missing`) or has no Feishu configuration (`not_configured`), the
+questionnaire opens the local dialog with a warning instead of waiting out the send
+timeout. Other send failures return an envelope telling the model the user never saw the
+questions and to ask them as plain chat text — explicitly not a decline. The message names
+the error code (`not_configured`, `permission_denied`, …), or `timeout` when the plugin did
+not answer the request in time; the user also gets an error notification with the failure's
+key point.
 
 ### Local-timeout fallback
 

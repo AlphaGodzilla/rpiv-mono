@@ -4,11 +4,15 @@ import {
 	CHANNEL_INBOUND,
 	CHANNEL_SEND,
 	CHANNEL_SEND_RESULT,
+	CHANNEL_STATUS,
+	CHANNEL_STATUS_RESULT,
 	type ChannelInboundAction,
 	type ChannelInboundEvent,
 	type ChannelInboundMessage,
 	type ChannelSendRequest,
 	type ChannelSendResult,
+	type ChannelStatusRequest,
+	type ChannelStatusResult,
 	createFeishuTransport,
 	createTgTransport,
 	type EventsLike,
@@ -19,7 +23,7 @@ import { buildTgAnswerNote, buildTgKeyboard, buildTgQuestionMessage } from "./tg
 
 /**
  * Transport-level tests for the pi-channel event bus wiring: outbound payload
- * shapes + requestId correlation, the failure/timeout degradation contract,
+ * shapes + requestId correlation, the readiness probe, the failure/timeout degradation contract,
  * and the inbound filtering/locking rules of both providers. A FakeBus stands
  * in for the plugin — no network, no real bus.
  */
@@ -27,6 +31,17 @@ import { buildTgAnswerNote, buildTgKeyboard, buildTgQuestionMessage } from "./tg
 class FakeBus implements EventsLike {
 	private readonly handlers = new Map<string, Set<(data: unknown) => void>>();
 	readonly sends: ChannelSendRequest[] = [];
+	/** Number of `ag-pi-channel:status` probes — asserted to prove memoization. */
+	statusQueries = 0;
+	/** Return `undefined` to stay silent (the readiness probe then times out → plugin_missing). */
+	statusResponder: (request: ChannelStatusRequest) => ChannelStatusResult | undefined = (request) => ({
+		requestId: request.requestId,
+		configPath: "/tmp/rpiv-test/pi-channel.json",
+		providers: [
+			{ provider: "feishu", configured: true, connected: true },
+			{ provider: "telegram", configured: true, connected: true },
+		],
+	});
 	/** Return `undefined` to stay silent (the send then times out). */
 	responder: (request: ChannelSendRequest) => ChannelSendResult | undefined = (request) => ({
 		requestId: request.requestId,
@@ -35,6 +50,12 @@ class FakeBus implements EventsLike {
 	});
 
 	emit(channel: string, data: unknown): void {
+		if (channel === CHANNEL_STATUS) {
+			this.statusQueries += 1;
+			const status = this.statusResponder(data as ChannelStatusRequest);
+			if (status !== undefined) queueMicrotask(() => this.deliver(CHANNEL_STATUS_RESULT, status));
+			return;
+		}
 		if (channel === CHANNEL_SEND) {
 			const request = data as ChannelSendRequest;
 			this.sends.push(request);
@@ -205,6 +226,43 @@ describe("feishu transport over the event bus", () => {
 			code: "not_configured",
 			message: "no credentials",
 		});
+	});
+
+	it("fails fast with plugin_missing and memoizes the probe when no status reply arrives", async () => {
+		const bus = new FakeBus();
+		bus.statusResponder = () => undefined;
+		const transport = await createFeishuTransport(feishuCfg(), {
+			events: bus,
+			probeTimeoutMs: 5,
+			sendTimeoutMs: 60_000,
+		});
+
+		await expect(transport.send({ type: "email", value: "me@example.com" }, "first")).rejects.toMatchObject({
+			code: "plugin_missing",
+			message: "the pi-channel plugin is not loaded (no ag-pi-channel:status reply)",
+		});
+		// The rejected probe is memoized — the second send fails without another probe.
+		await expect(transport.send({ type: "email", value: "me@example.com" }, "second")).rejects.toMatchObject({
+			code: "plugin_missing",
+		});
+
+		expect(bus.statusQueries).toBe(1);
+		expect(bus.sends).toHaveLength(0);
+	});
+
+	it("sends normally when the plugin reports the provider configured", async () => {
+		const bus = new FakeBus();
+		bus.statusResponder = (request) => ({
+			requestId: request.requestId,
+			configPath: "/tmp/rpiv-test/pi-channel.json",
+			providers: [{ provider: "feishu", configured: true, connected: true }],
+		});
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+
+		await expect(transport.send({ type: "email", value: "me@example.com" }, "hello")).resolves.toBeUndefined();
+
+		expect(bus.statusQueries).toBe(1);
+		expect(bus.sends).toHaveLength(1);
 	});
 
 	it("maps sendCard and updateCard onto card requests (update carries the messageId)", async () => {
@@ -393,6 +451,23 @@ describe("telegram transport over the event bus", () => {
 		const transport = createTgTransport(tgCfg(), { events: bus });
 
 		await expect(transport.sendText("x")).rejects.toMatchObject({ code: "no_target" });
+	});
+
+	it("rejects fast with not_configured when the plugin has no telegram configuration", async () => {
+		const bus = new FakeBus();
+		bus.statusResponder = (request) => ({
+			requestId: request.requestId,
+			configPath: "/tmp/rpiv-test/pi-channel.json",
+			providers: [{ provider: "feishu", configured: true, connected: true }],
+		});
+		const transport = createTgTransport(tgCfg(), { events: bus, probeTimeoutMs: 5, sendTimeoutMs: 60_000 });
+
+		await expect(transport.sendText("x")).rejects.toMatchObject({
+			code: "not_configured",
+			message: "pi-channel has no telegram configuration (/tmp/rpiv-test/pi-channel.json)",
+		});
+
+		expect(bus.sends).toHaveLength(0);
 	});
 
 	it("accepts text only from the configured chat and @-user", async () => {

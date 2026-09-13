@@ -146,6 +146,10 @@ If `localTimeoutMs` is configured but no Feishu receiver is configured, the fall
 silently disabled — the local dialog never times out, so a config mistake cannot turn a
 waiting user into a cancelled questionnaire.
 
+When the pi-channel plugin is absent or has no Feishu configuration, questionnaires skip
+the remote channel and open the local dialog with a warning instead — a 1.5 s readiness
+probe detects this before any send is attempted.
+
 Each question is sent as one message to every receiver; the first matching reply wins
 (`Type something.`-style custom answers are plain text, option numbers select options,
 multi-select accepts `1,3`). In group chats the bot only reacts to messages that @ it; in
@@ -193,6 +197,10 @@ and **all Feishu logic is skipped** (both the `remote` primary mode and the loca
 fallback to Feishu). Only the configured @-user's replies/button clicks count as answers.
 The bot token (and any HTTP(S) proxy) live in the **pi-channel** plugin config; this
 package only names the target chat and the @-user.
+
+When the plugin is absent or has no Telegram configuration, the questionnaire opens the
+local dialog with a warning instead of attempting a remote send (detected by a 1.5 s
+readiness probe).
 
 | Field | What it does | Default |
 | --- | --- | --- |

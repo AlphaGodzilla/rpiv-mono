@@ -4,6 +4,7 @@ import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.js";
 import type { RemoteTransport } from "./remote/channel-transport.js";
+import { FakeChannelBus } from "./test-fixtures.js";
 import type { QuestionnaireResult, QuestionParams } from "./tool/types.js";
 
 /**
@@ -128,7 +129,7 @@ interface Harness {
 			custom: ReturnType<typeof vi.fn>;
 		};
 	};
-	events: { emit: ReturnType<typeof vi.fn> };
+	events: FakeChannelBus;
 	/** Resolve the pending ui.custom with a result (user submit / cancel). */
 	resolveCustom: (result: QuestionnaireResult) => void;
 }
@@ -166,7 +167,7 @@ function makeHarness(): Harness {
 		},
 	};
 
-	const events = { emit: vi.fn() };
+	const events = new FakeChannelBus();
 	const pi = {
 		registerTool: vi.fn(),
 		registerCommand: vi.fn(),
@@ -238,7 +239,39 @@ describe("ask_user_question — Feishu remote as primary mode", () => {
 		expect(text).toContain("never saw the questions");
 		expect(text).toContain("permission_denied");
 		expect(text).toContain("do NOT treat this as a decline");
+		// ③ The user sees the failure too — not just the model.
+		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("permission_denied"), "error");
 	});
+
+	it("falls back to the local questionnaire with a warning when the pi-channel plugin is absent", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = makeHarness();
+			h.events.status = null; // no ag-pi-channel:status reply → no plugin
+			const promise = h.execute("t1", makeParams(), undefined, undefined, h.ctx);
+
+			// The readiness probe waits out its 1.5s timeout before falling back.
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+
+			h.resolveCustom({
+				answers: [{ questionIndex: 0, question: "Which library?", kind: "option", answer: "A" }],
+				cancelled: false,
+			});
+			const result = await promise;
+
+			expect(createFeishuTransportMock).not.toHaveBeenCalled();
+			expect(h.ctx.ui.notify).toHaveBeenCalledWith(
+				expect.stringContaining("the pi-channel plugin is not loaded"),
+				"warning",
+			);
+			const content = (result as { content: { text: string }[] }).content[0].text;
+			expect(content).toContain('"Which library?"="A"');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("recovers to the local ask when the Feishu wait times out, merging answers by original index", async () => {
 		const transport = makeTransport();
 		vi.mocked(transport.waitForReply)

@@ -1,4 +1,12 @@
 import { vi } from "vitest";
+import {
+	CHANNEL_STATUS,
+	CHANNEL_STATUS_RESULT,
+	type ChannelProviderStatus,
+	type ChannelStatusRequest,
+	type ChannelStatusResult,
+	type EventsLike,
+} from "./remote/channel-transport.js";
 import type { QuestionnaireState } from "./state/state.js";
 import type { ApplyContext } from "./state/state-reducer.js";
 import type { QuestionData } from "./tool/types.js";
@@ -8,6 +16,47 @@ import type { SubmitPickerProps } from "./view/components/submit-picker.js";
 import type { WrappingSelectItem } from "./view/components/wrapping-select.js";
 import type { StatefulView } from "./view/stateful-view.js";
 import type { TabComponents } from "./view/tab-components.js";
+
+/**
+ * Fake pi EventBus for the tool-level tests: records every `emit` on a spy and
+ * answers `ag-pi-channel:status` so the transport readiness probe passes.
+ * `status = null` emulates an absent pi-channel plugin (the probe times out);
+ * drop a provider from `status.providers` (or flip its `configured`) to emulate
+ * a plugin without that provider's configuration.
+ */
+export class FakeChannelBus implements EventsLike {
+	private readonly handlers = new Map<string, Set<(data: unknown) => void>>();
+
+	status: { configPath: string; providers: ChannelProviderStatus[] } | null = {
+		configPath: "/tmp/rpiv-test/pi-channel.json",
+		providers: [
+			{ provider: "feishu", configured: true, connected: true },
+			{ provider: "telegram", configured: true, connected: true },
+		],
+	};
+
+	readonly emit = vi.fn((channel: string, data: unknown): void => {
+		if (channel === CHANNEL_STATUS) {
+			if (this.status === null) return;
+			const request = data as ChannelStatusRequest;
+			const result: ChannelStatusResult = { ...this.status, requestId: request.requestId };
+			queueMicrotask(() => this.deliver(CHANNEL_STATUS_RESULT, result));
+			return;
+		}
+		this.deliver(channel, data);
+	});
+
+	on(channel: string, handler: (data: unknown) => void): () => void {
+		const set = this.handlers.get(channel) ?? new Set<(data: unknown) => void>();
+		this.handlers.set(channel, set);
+		set.add(handler);
+		return () => set.delete(handler);
+	}
+
+	private deliver(channel: string, data: unknown): void {
+		for (const handler of this.handlers.get(channel) ?? []) handler(data);
+	}
+}
 
 export const itemsRegular: ReadonlyArray<WrappingSelectItem> = [
 	{ kind: "option", label: "A" },

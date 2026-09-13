@@ -9,10 +9,13 @@ import {
 } from "./events.js";
 import { isAskPrdActive } from "./remote/ask-prd-state.js";
 import {
+	type ChannelProvider,
 	classifyRemoteError,
 	createFeishuTransport,
 	createTgTransport,
+	DEFAULT_STATUS_TIMEOUT_MS,
 	type EventsLike,
+	statusViaBus,
 } from "./remote/channel-transport.js";
 import {
 	getLocalTimeoutMs,
@@ -203,6 +206,16 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 							typed,
 						);
 					}
+					// ② tg 通道不可用时回落本地问卷（与 isTgConfigured 失败同一条路径）：
+					// 远程流程只会白等 10s 再失败，用户界面上却毫无提示。
+					const readiness = await checkChannelReady(pi.events, "telegram");
+					if (!readiness.ready) {
+						notifyChannelFallback(ctx, readiness.reason);
+						return localOutcomeEnvelope(
+							await runLocalQuestionnaire(pi, ctx, typed, remoteCfg, { enableLocalTimeout: false }),
+							typed,
+						);
+					}
 					const outcome = await runTgQuestionnaireWithConnect(
 						pi.events,
 						ctx,
@@ -222,6 +235,8 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 						);
 						return localOutcomeEnvelope(recovered, typed);
 					}
+					// ③ 非「通道不可用」类的失败也要让用户看到，而不是只有模型收到失败信封。
+					notifyRemoteFailure(ctx, outcome.message);
 					return buildToolResult(outcome.message, { answers: outcome.partialAnswers, cancelled: true });
 				} finally {
 					emitAskUserBlockedEvent(pi, false);
@@ -230,6 +245,13 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 			if (shouldUseRemote(remoteCfg)) {
 				emitAskUserBlockedEvent(pi, true);
 				try {
+					// ② 通道不可用（插件缺席 / 未配置 provider）时直接回落本地问卷：
+					// 远程流程只会白等 10s 再失败，用户界面上却毫无提示。
+					const readiness = await checkChannelReady(pi.events, "feishu");
+					if (!readiness.ready) {
+						notifyChannelFallback(ctx, readiness.reason);
+						return localOutcomeEnvelope(await runLocalQuestionnaire(pi, ctx, typed, remoteCfg), typed);
+					}
 					const outcome = await runRemoteQuestionnaireWithConnect(
 						pi.events,
 						ctx,
@@ -249,6 +271,8 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 						);
 						return localOutcomeEnvelope(recovered, typed);
 					}
+					// ③ 非「通道不可用」类的失败也要让用户看到，而不是只有模型收到失败信封。
+					notifyRemoteFailure(ctx, outcome.message);
 					return buildToolResult(outcome.message, { answers: outcome.partialAnswers, cancelled: true });
 				} finally {
 					emitAskUserBlockedEvent(pi, false);
@@ -269,6 +293,52 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 	// open.
 	const timer = setTimeout(() => void loadQuestionnaireSession().catch(() => undefined), PREWARM_DELAY_MS);
 	timer.unref?.();
+}
+
+/** 就绪探测与用户提示共用的 ctx 切片；`warning` 也要能透传。 */
+type ChannelNotifyCtx = { ui: { notify?: (message: string, level: "info" | "warning" | "error") => void } };
+
+/** 远程失败提示只给要点，不把整段 LLM 失败信封抛给用户。 */
+const FAILURE_NOTIFY_MAX_CHARS = 200;
+
+type ChannelReadiness = { ready: true } | { ready: false; reason: string };
+
+/**
+ * 进入远程问卷前的一次就绪检查：插件没加载、或该 provider 没配置时，远程发送注定
+ * 失败（还得先等满 10s 的 send 超时）。提前判定，让调用方回落本地 TUI 问卷 ——
+ * 用户当场就能回答，而不是干等一条永远不会到的远程消息。
+ */
+async function checkChannelReady(events: EventsLike, provider: ChannelProvider): Promise<ChannelReadiness> {
+	const status = await statusViaBus(events, DEFAULT_STATUS_TIMEOUT_MS);
+	if (status === null) {
+		return { ready: false, reason: t("remote.channel_plugin_missing", "the pi-channel plugin is not loaded") };
+	}
+	const providerStatus = status.providers.find((p) => p.provider === provider);
+	if (!providerStatus?.configured) {
+		return {
+			ready: false,
+			reason: t(
+				"remote.channel_not_configured",
+				`pi-channel has no ${provider} configuration (${status.configPath})`,
+			),
+		};
+	}
+	return { ready: true };
+}
+
+/** 远程通道不就绪时的用户提示：说明原因，并告诉用户改走本地问卷。 */
+function notifyChannelFallback(ctx: ChannelNotifyCtx, reason: string): void {
+	ctx.ui.notify?.(t("remote.channel_fallback", `${reason} — falling back to the local questionnaire`), "warning");
+}
+
+/** ③ 远程问卷以失败告终时的用户提示：否则只有模型收到失败信封，用户界面一片沉默。 */
+function notifyRemoteFailure(ctx: ChannelNotifyCtx, message: string): void {
+	// 信封前置文案几乎全是对模型的操作指引，用户只需要尾部的 `(code … — …)` 要点；
+	// 取不到时退回整条消息的头 200 字符。
+	const detail = message.match(/\((?:[^()]*\bcode\b[^()]*)\)\s*$/)?.[0];
+	const brief = (detail ?? message).trim();
+	const capped = brief.length > FAILURE_NOTIFY_MAX_CHARS ? `${brief.slice(0, FAILURE_NOTIFY_MAX_CHARS - 1)}…` : brief;
+	ctx.ui.notify?.(t("remote.failed_notify", `Remote questionnaire failed: ${capped}`), "error");
 }
 
 /**

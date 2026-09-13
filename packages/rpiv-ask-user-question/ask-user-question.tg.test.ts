@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAskUserQuestionTool } from "./ask-user-question.js";
 import type { TgTransport } from "./remote/channel-transport.js";
 import type { RemoteOutcome } from "./remote/remote-questionnaire.js";
+import { FakeChannelBus } from "./test-fixtures.js";
 import type { QuestionnaireResult, QuestionParams } from "./tool/types.js";
 
 /**
@@ -131,7 +132,7 @@ type Execute = (
 interface Harness {
 	execute: Execute;
 	ctx: Parameters<Execute>[4];
-	events: { emit: ReturnType<typeof vi.fn> };
+	events: FakeChannelBus;
 	resolveCustom: (result: QuestionnaireResult) => void;
 }
 
@@ -167,7 +168,7 @@ function makeHarness(): Harness {
 			),
 		},
 	};
-	const events = { emit: vi.fn() };
+	const events = new FakeChannelBus();
 	const pi = {
 		registerTool: vi.fn(),
 		registerCommand: vi.fn(),
@@ -250,6 +251,35 @@ describe("ask_user_question — session-level ask-prd routing", () => {
 		expect(createTgTransportMock).not.toHaveBeenCalled();
 		expect(createFeishuTransportMock).not.toHaveBeenCalled();
 		expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+		const content = (result as { content: { text: string }[] }).content[0].text;
+		expect(content).toContain("local");
+	});
+
+	it("falls back to the local questionnaire with a warning when pi-channel has no telegram configuration", async () => {
+		isAskPrdActiveMock.mockReturnValue(true);
+		isTgConfiguredMock.mockReturnValue(true);
+		const h = makeHarness();
+		h.events.status = {
+			configPath: "/tmp/rpiv-test/pi-channel.json",
+			providers: [{ provider: "feishu", configured: true, connected: true }],
+		};
+
+		const promise = h.execute("t1", makeParams(), undefined, undefined, h.ctx);
+		await vi.waitFor(() => {
+			expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+		});
+		h.resolveCustom({
+			answers: [{ questionIndex: 0, question: "Which library?", kind: "custom", answer: "local" }],
+			cancelled: false,
+		});
+		const result = await promise;
+
+		expect(createTgTransportMock).not.toHaveBeenCalled();
+		expect(runTgQuestionnaireMock).not.toHaveBeenCalled();
+		expect(h.ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("pi-channel has no telegram configuration (/tmp/rpiv-test/pi-channel.json)"),
+			"warning",
+		);
 		const content = (result as { content: { text: string }[] }).content[0].text;
 		expect(content).toContain("local");
 	});

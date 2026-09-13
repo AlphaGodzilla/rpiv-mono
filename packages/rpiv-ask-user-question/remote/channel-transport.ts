@@ -10,10 +10,13 @@ import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type Tg
  * (Feishu websocket / Telegram long-polling); this package only emits
  * `ag-pi-channel:send` requests and listens for `ag-pi-channel:inbound`
  * events. The constants, payload types, `readAckText` convention and
- * `sendViaBus` below are a copy of `pi-mono/packages/pi-channel/lib/events.ts`
+ * `sendViaBus` / `statusViaBus` below are a copy of
+ * `pi-mono/packages/pi-channel/lib/events.ts`
  * — cross-repo imports are not possible, so the contract MUST stay in sync:
  * the plugin is the other side of these events and the requestId correlation
- * in `sendViaBus` is what matches a result to its request.
+ * in `sendViaBus` is what matches a result to its request. The only intended
+ * divergence is the shorter default of `statusViaBus` (1.5s — a pre-flight
+ * probe budget, not pi-channel's 5s interactive default).
  *
  * `RemoteTransport` (Feishu) and `TgTransport` (Telegram) keep their old
  * surface so the questionnaire orchestrators stay untouched: `send*` rejects
@@ -24,6 +27,8 @@ import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type Tg
 export const CHANNEL_SEND = "ag-pi-channel:send";
 export const CHANNEL_SEND_RESULT = "ag-pi-channel:send:result";
 export const CHANNEL_INBOUND = "ag-pi-channel:inbound";
+export const CHANNEL_STATUS = "ag-pi-channel:status";
+export const CHANNEL_STATUS_RESULT = "ag-pi-channel:status:result";
 
 export type ChannelProvider = "feishu" | "telegram";
 
@@ -131,6 +136,27 @@ export type ChannelInboundAction = {
 
 export type ChannelInboundEvent = ChannelInboundMessage | ChannelInboundAction;
 
+export type ChannelStatusRequest = {
+	requestId: string;
+};
+
+export type ChannelProviderStatus = {
+	provider: ChannelProvider;
+	/** 配置里存在且必填项齐备 */
+	configured: boolean;
+	/** 长连接/长轮询是否已建立（出站模式未连接时为 false） */
+	connected: boolean;
+	/** 脱敏后的应用标识（feishu appId / telegram bot id），便于确认用的是哪套凭据 */
+	accountMasked?: string;
+	error?: string;
+};
+
+export type ChannelStatusResult = {
+	requestId: string;
+	configPath: string;
+	providers: ChannelProviderStatus[];
+};
+
 /** 消费方需要的最小事件总线形状（与 pi 的 EventBus 结构一致）。 */
 export type EventsLike = {
 	emit(channel: string, data: unknown): void;
@@ -175,6 +201,40 @@ export async function sendViaBus(
 		});
 
 		events.emit(CHANNEL_SEND, payload);
+	});
+}
+
+/** 状态查询的默认等待上限：只用于出站前置探测，不必像发送那样等满 10s。 */
+export const DEFAULT_STATUS_TIMEOUT_MS = 1_500;
+
+/**
+ * 查询插件状态（连接情况 / 配置路径 / 脱敏账号），超时返回 `null`。
+ * 与 `pi-mono/packages/pi-channel/lib/events.ts` 的 `statusViaBus` 同语义
+ * （requestId 关联响应 + 超时返回 `null`，绝不抛异常）；默认上限压到 1.5s ——
+ * 它只服务出站前置探测，不该像真正的发送那样等满 10s。
+ */
+export async function statusViaBus(
+	events: EventsLike,
+	timeoutMs = DEFAULT_STATUS_TIMEOUT_MS,
+): Promise<ChannelStatusResult | null> {
+	const requestId = globalThis.crypto.randomUUID();
+	return await new Promise<ChannelStatusResult | null>((resolve) => {
+		let settled = false;
+		const finish = (result: ChannelStatusResult | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			unsubscribe();
+			resolve(result);
+		};
+		const timer = setTimeout(() => finish(null), timeoutMs);
+		timer.unref?.();
+		const unsubscribe = events.on(CHANNEL_STATUS_RESULT, (data) => {
+			const result = data as ChannelStatusResult | undefined;
+			if (!result || result.requestId !== requestId) return;
+			finish(result);
+		});
+		events.emit(CHANNEL_STATUS, { requestId } satisfies ChannelStatusRequest);
 	});
 }
 
@@ -266,28 +326,62 @@ export interface TgTransport {
 	close(): Promise<void>;
 }
 
-/** How the transports reach the pi-channel plugin; `sendTimeoutMs` is a test seam. */
+/** How the transports reach the pi-channel plugin; both timeouts are test seams. */
 export interface ChannelTransportDeps {
 	events: EventsLike;
 	/** Outbound send timeout (default 10s — the plugin's own request budget). */
 	sendTimeoutMs?: number;
+	/** One-shot plugin readiness probe timeout (default 1.5s). */
+	probeTimeoutMs?: number;
 }
 
-class ChannelTransportBase<Reply> {
+abstract class ChannelTransportBase<Reply> {
+	protected abstract readonly provider: ChannelProvider;
 	protected readonly events: EventsLike;
 	protected readonly sendTimeoutMs: number;
+	protected readonly probeTimeoutMs: number;
 
 	private active = true;
 	private unsubscribe: (() => void) | undefined;
 	private cancelPending: (() => void) | undefined;
+	/** 记忆化的一次性就绪探测；一旦失败，之后每次发送都直接沿用该拒绝。 */
+	private readinessProbe: Promise<void> | undefined;
 
 	constructor(deps: ChannelTransportDeps) {
 		this.events = deps.events;
 		this.sendTimeoutMs = deps.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
+		this.probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
+	}
+
+	/**
+	 * 首次发送前的就绪探测。为什么：插件缺席时 `sendViaBus` 只能等满
+	 * `sendTimeoutMs`（默认 10s）才报 timeout；provider 未配置时发送也永远
+	 * 不会成功。提前探测让失败更快、错误码更准（plugin_missing / not_configured）。
+	 * 探测结果按实例记忆化：后续发送不再重复探测，失败也直接沿用。
+	 */
+	private ensurePluginReady(): Promise<void> {
+		this.readinessProbe ??= (async () => {
+			const status = await statusViaBus(this.events, this.probeTimeoutMs);
+			if (status === null) {
+				throw new ChannelSendError(
+					"plugin_missing",
+					"the pi-channel plugin is not loaded (no ag-pi-channel:status reply)",
+				);
+			}
+			const provider = status.providers.find((p) => p.provider === this.provider);
+			if (!provider?.configured) {
+				throw new ChannelSendError(
+					"not_configured",
+					`pi-channel has no ${this.provider} configuration (${status.configPath})`,
+				);
+			}
+		})();
+		return this.readinessProbe;
 	}
 
 	/** Emit one send request and reject when the plugin reports a failure or the request times out. */
 	protected async sendRequest(request: ChannelSendInput): Promise<string | undefined> {
+		await this.ensurePluginReady();
 		const result = await sendViaBus(this.events, request, this.sendTimeoutMs);
 		if (!result.ok) {
 			const code = result.error?.code ?? "unknown";
@@ -343,6 +437,7 @@ class ChannelTransportBase<Reply> {
 }
 
 class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements RemoteTransport {
+	protected readonly provider: ChannelProvider = "feishu";
 	private readonly groupChatIds: Set<string>;
 
 	constructor(cfg: FeishuRemoteConfig, deps: ChannelTransportDeps) {
@@ -435,6 +530,7 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 }
 
 class TgBusTransport extends ChannelTransportBase<TgReply> implements TgTransport {
+	protected readonly provider: ChannelProvider = "telegram";
 	private readonly tgCfg: TgRemoteConfig;
 
 	constructor(cfg: TgRemoteConfig, deps: ChannelTransportDeps) {
