@@ -49,20 +49,20 @@
 		]
 	},
 	"dependencies": {
-		"@juicesharp/rpiv-config": "^2.4.0",
+		"@juicesharp/rpiv-config": "workspace:*",
 		"typebox": "^1.1.24"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",
 		"@earendil-works/pi-coding-agent": "*",
 		"@tintinweb/pi-subagents": "*",
-		"@juicesharp/rpiv-ask-user-question": "*",
-		"@juicesharp/rpiv-todo": "*",
-		"@juicesharp/rpiv-advisor": "*",
-		"@juicesharp/rpiv-i18n": "*",
-		"@juicesharp/rpiv-web-tools": "*",
-		"@juicesharp/rpiv-args": "*",
-		"@juicesharp/rpiv-workflow": "*",
+		"@juicesharp/rpiv-ask-user-question": "workspace:*",
+		"@juicesharp/rpiv-todo": "workspace:*",
+		"@juicesharp/rpiv-advisor": "workspace:*",
+		"@juicesharp/rpiv-i18n": "workspace:*",
+		"@juicesharp/rpiv-web-tools": "workspace:*",
+		"@juicesharp/rpiv-args": "workspace:*",
+		"@juicesharp/rpiv-workflow": "workspace:*",
 		"yaml": "*",
 		"jiti": "*",
 		"@standard-schema/spec": "*"

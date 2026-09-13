@@ -58,6 +58,6 @@
 		"@earendil-works/pi-coding-agent": "*"
 	},
 	"dependencies": {
-		"@juicesharp/rpiv-config": "^2.4.0"
+		"@juicesharp/rpiv-config": "workspace:*"
 	}
 }

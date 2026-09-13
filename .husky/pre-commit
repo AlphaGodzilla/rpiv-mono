@@ -5,14 +5,14 @@ STAGED_FILES=$(git diff --cached --name-only)
 
 # Decision-code contamination guard — fail-fast before the slower biome + tsc pass.
 echo "Checking for decision-code contamination..."
-npm run check:decision-codes
+pnpm run check:decision-codes
 if [ $? -ne 0 ]; then
   echo "❌ Decision-code citations found — reword the comment to state the contract (see scripts/check-no-decision-codes.mjs)."
   exit 1
 fi
 
 echo "Running formatting, linting, and type checking..."
-npm run check
+pnpm run check
 if [ $? -ne 0 ]; then
   echo "❌ Checks failed. Please fix the errors before committing."
   exit 1

@@ -17,10 +17,10 @@
  * Steps:
  * 1. Check for uncommitted changes
  * 2. Warn if every [Unreleased] section is empty
- * 3. Bump version via npm run version:xxx (lockstep across all packages)
+ * 3. Bump version via pnpm run version:xxx (lockstep across all packages)
  * 4. Promote each package CHANGELOG: [Unreleased] -> [version] - date
  * 5. Commit and tag
- * 6. Publish to npm (npm publish -ws --access public)
+ * 6. Publish to the npm registry (pnpm -r publish --access public)
  * 7. Reinstate [Unreleased] section in each CHANGELOG
  * 8. Commit the [Unreleased] reinstatement
  * 9. Push main + tag
@@ -90,7 +90,7 @@ function bumpOrSetVersion(target) {
 
 	if (BUMP_TYPES.has(target)) {
 		console.log(`Bumping version (${target})...`);
-		run(`npm run version:${target}`);
+		run(`pnpm run version:${target}`);
 		return getVersion();
 	}
 
@@ -101,7 +101,7 @@ function bumpOrSetVersion(target) {
 
 	console.log(`Setting explicit version (${target})...`);
 	run(
-		`npm version ${target} -ws --no-git-tag-version && node scripts/sync-versions.js && npx shx rm -rf node_modules packages/*/node_modules package-lock.json && npm install`,
+		`node scripts/sync-versions.js --bump ${target} && npx shx rm -rf node_modules packages/*/node_modules pnpm-lock.yaml && pnpm install`,
 	);
 	return getVersion();
 }
@@ -179,17 +179,17 @@ if (status?.trim()) {
 }
 console.log("  Working directory clean\n");
 
-console.log("Checking npm publish auth...");
-const npmUser = run("npm whoami", { silent: true, ignoreError: true });
-if (!npmUser?.trim()) {
-	console.error("Error: not authenticated to the npm registry (npm whoami failed).");
+console.log("Checking npm registry auth...");
+const registryUser = run("pnpm whoami", { silent: true, ignoreError: true });
+if (!registryUser?.trim()) {
+	console.error("Error: not authenticated to the npm registry (pnpm whoami failed).");
 	console.error("  Publishing requires an interactive OTP session or a granular token with 2FA bypass.");
 	console.error(
 		"  Fix auth now — the publish step runs AFTER commit + tag, so failing there leaves a half-done release.",
 	);
 	process.exit(1);
 }
-console.log(`  Authenticated as ${npmUser.trim()}\n`);
+console.log(`  Authenticated as ${registryUser.trim()}\n`);
 
 console.log("Checking [Unreleased] sections...");
 if (!hasUnreleasedEntries()) {
@@ -201,7 +201,7 @@ if (!hasUnreleasedEntries()) {
 }
 
 console.log("Running test suite with coverage...");
-run("npm run coverage");
+run("pnpm run coverage");
 console.log();
 
 const version = bumpOrSetVersion(RELEASE_TARGET);
@@ -218,7 +218,7 @@ run(`git tag v${version}`);
 console.log();
 
 console.log("Publishing to npm...");
-run("npm run publish");
+run("pnpm run publish");
 console.log();
 
 console.log("Reinstating [Unreleased] sections for next cycle...");

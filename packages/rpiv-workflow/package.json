@@ -111,7 +111,7 @@
 		]
 	},
 	"dependencies": {
-		"@juicesharp/rpiv-config": "^2.4.0",
+		"@juicesharp/rpiv-config": "workspace:*",
 		"jiti": "^2.7.0",
 		"typebox": "^1.1.24"
 	},
