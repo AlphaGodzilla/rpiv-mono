@@ -135,6 +135,28 @@ function feishuButtonValues(card: unknown): unknown[] {
 		.map((col) => col.elements?.[0]?.behaviors?.[0]?.value);
 }
 
+/**
+ * Narrow a recorded send request to a Feishu card request, failing loudly when
+ * the payload is not `{ provider: "feishu", kind: "card" }`.
+ */
+function expectFeishuCard(request: ChannelSendRequest) {
+	if (request.provider !== "feishu" || request.kind !== "card") {
+		throw new Error(`expected a feishu card request, got ${request.provider}/${request.kind}`);
+	}
+	return request;
+}
+
+/**
+ * Narrow a recorded send request to a Telegram card request, failing loudly when
+ * the payload is not `{ provider: "telegram", kind: "card" }`.
+ */
+function expectTelegramCard(request: ChannelSendRequest) {
+	if (request.provider !== "telegram" || request.kind !== "card") {
+		throw new Error(`expected a telegram card request, got ${request.provider}/${request.kind}`);
+	}
+	return request;
+}
+
 describe("feishu transport over the event bus", () => {
 	it("emits a send request with provider, target and text, and resolves on the correlated result", async () => {
 		const bus = new FakeBus();
@@ -151,7 +173,7 @@ describe("feishu transport over the event bus", () => {
 			to: { id: "me@example.com", type: "email" },
 			text: "hello",
 		});
-		expect("card" in sent).toBe(false);
+		expect("feishuCard" in sent).toBe(false);
 	});
 
 	it("ignores a result for another requestId (times out) and accepts the correlated one", async () => {
@@ -195,7 +217,7 @@ describe("feishu transport over the event bus", () => {
 			provider: "feishu",
 			kind: "card",
 			to: { id: "oc_1", type: "chat_id" },
-			card,
+			feishuCard: card,
 		});
 
 		await transport.updateCard("om_9", card);
@@ -203,7 +225,7 @@ describe("feishu transport over the event bus", () => {
 			provider: "feishu",
 			kind: "card",
 			update: { messageId: "om_9" },
-			card,
+			feishuCard: card,
 		});
 	});
 
@@ -264,8 +286,9 @@ describe("feishu transport over the event bus", () => {
 		expect(bus.sends).toHaveLength(1);
 		const update = bus.sends[0];
 		expect(update).toMatchObject({ provider: "feishu", kind: "card", update: { messageId: "om_card" } });
-		expect(update.card).toEqual(buildQuestionCard(question, 0, 1));
-		expect(feishuButtonValues(update.card)).toEqual([
+		const lockedCard = expectFeishuCard(update);
+		expect(lockedCard.feishuCard).toEqual(buildQuestionCard(question, 0, 1));
+		expect(feishuButtonValues(lockedCard.feishuCard)).toEqual([
 			{ q: "0", o: "1", ackText: "已选择" },
 			{ q: "0", o: "2", ackText: "已选择" },
 			{ q: "0", c: "1", ackText: "已取消" },
@@ -281,7 +304,7 @@ describe("feishu transport over the event bus", () => {
 		bus.inbound(feishuAction({ value: { q: "0", c: "1", ackText: "已取消" } }));
 
 		await expect(pending).resolves.toMatchObject({ text: "取消", messageId: "om_card" });
-		expect(bus.sends[0].card).toEqual(buildQuestionCard(question, 0, undefined, true));
+		expect(expectFeishuCard(bus.sends[0]).feishuCard).toEqual(buildQuestionCard(question, 0, undefined, true));
 	});
 
 	it("ignores clicks on a stale card (q mismatch) and clicks without a card context", async () => {
@@ -340,7 +363,7 @@ describe("telegram transport over the event bus", () => {
 			text: "hello <a>@u</a>",
 			parseMode: "HTML",
 		});
-		expect("card" in bus.sends[0]).toBe(false);
+		expect("telegramKeyboard" in bus.sends[0]).toBe(false);
 	});
 
 	it("sends the reply_markup keyboard as a card with HTML parse mode", async () => {
@@ -355,7 +378,7 @@ describe("telegram transport over the event bus", () => {
 			kind: "card",
 			to: { id: "-100123" },
 			text: "question",
-			card: keyboard,
+			telegramKeyboard: keyboard,
 			parseMode: "HTML",
 		});
 	});
@@ -421,13 +444,13 @@ describe("telegram transport over the event bus", () => {
 
 		await expect(pending).resolves.toEqual({ text: "2", chatId: -100123, messageId: 222 });
 		expect(bus.sends).toHaveLength(1);
-		const finalize = bus.sends[0];
+		const finalize = expectTelegramCard(bus.sends[0]);
 		expect(finalize).toMatchObject({
 			provider: "telegram",
 			kind: "card",
 			to: { id: "-100123" },
 			update: { messageId: "222" },
-			card: { inline_keyboard: [] },
+			telegramKeyboard: { inline_keyboard: [] },
 			parseMode: "HTML",
 		});
 		expect(finalize.text).toBe(buildTgQuestionMessage(question, tgCfg()) + buildTgAnswerNote(question, 2, false));

@@ -37,24 +37,63 @@ export type ChannelTarget = {
 	type?: FeishuReceiverType;
 };
 
-export type ChannelSendRequest = {
+/**
+ * 出站请求：**按 provider 判别的联合类型**。
+ *
+ * 两家的"卡片"不是同一层概念，字段因此分开、不共用一个槽位：
+ *  - 飞书：`feishuCard` 就是整条消息（交互卡片自带 header/body，`msg_type: interactive`）
+ *  - Telegram：`telegramKeyboard` 只是 reply_markup（键盘），正文必须另给 `text`
+ * 这样编译期就能挡住"把飞书卡片发给 telegram"这类错配。
+ */
+export type ParseMode = "HTML" | "MarkdownV2";
+
+/** 出站请求的公共字段（provider/kind 之外的都在这） */
+export type ChannelSendCommon = {
 	requestId: string;
-	provider: ChannelProvider;
-	kind: "text" | "card";
 	/** 缺省用该 provider 配置里的默认收件人（feishu.defaultReceiver / telegram.defaultChatId） */
 	to?: ChannelTarget;
-	/** kind = "text" 时的正文 */
-	text?: string;
-	/** kind = "card" 时的 provider 原生载荷：feishu = 交互卡片 JSON；telegram = reply_markup 对象 */
-	card?: unknown;
-	/** 传了则更新既有消息：feishu 走卡片 patch，telegram 走 editMessageText / editMessageReplyMarkup */
-	update?: { messageId: string; text?: string };
-	/**
-	 * 文本解析模式（telegram 专用）：`HTML` / `MarkdownV2`；缺省纯文本。
-	 * feishu 忽略该字段（飞书文本消息不走 parse_mode）。
-	 */
-	parseMode?: "HTML" | "MarkdownV2";
 };
+
+/** 飞书：文本消息，或整卡发送 / 整卡替换（patch） */
+export type FeishuSendRequest = ChannelSendCommon &
+	(
+		| { provider: "feishu"; kind: "text"; text: string }
+		| {
+				provider: "feishu";
+				kind: "card";
+				/** 飞书交互卡片 JSON（schema 2.0 等），插件原样投递 */
+				feishuCard: object;
+				/** 传了则整卡替换既有消息（im.v1.message.patch） */
+				update?: { messageId: string };
+		  }
+	);
+
+/**
+ * Telegram：键盘只是附件，因此 `kind: "card"` 必须同时给 `text`；
+ * `kind: "keyboard"` 仅用于"只替换键盘"的更新（编辑已发消息的按钮）。
+ */
+export type TelegramSendRequest = ChannelSendCommon &
+	(
+		| { provider: "telegram"; kind: "text"; text: string; parseMode?: ParseMode; update?: { messageId: string } }
+		| {
+				provider: "telegram";
+				kind: "card";
+				text: string;
+				/** reply_markup 对象（inline_keyboard 等），插件原样投递 */
+				telegramKeyboard: object;
+				parseMode?: ParseMode;
+				update?: { messageId: string };
+		  }
+		| { provider: "telegram"; kind: "keyboard"; telegramKeyboard: object; update: { messageId: string } }
+	);
+
+export type ChannelSendRequest = FeishuSendRequest | TelegramSendRequest;
+
+/** 分配式 Omit：联合类型逐个成员处理（`Omit<Union, K>` 只会塌成公共键） */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/** 消费方调用时无需自己生成 requestId */
+export type ChannelSendInput = DistributiveOmit<ChannelSendRequest, "requestId"> & { requestId?: string };
 
 export type ChannelSendResult = {
 	requestId: string;
@@ -107,7 +146,7 @@ export const DEFAULT_SEND_TIMEOUT_MS = 10_000;
  */
 export async function sendViaBus(
 	events: EventsLike,
-	request: Omit<ChannelSendRequest, "requestId"> & { requestId?: string },
+	request: ChannelSendInput,
 	timeoutMs = DEFAULT_SEND_TIMEOUT_MS,
 ): Promise<ChannelSendResult> {
 	const requestId = request.requestId ?? globalThis.crypto.randomUUID();
@@ -248,9 +287,7 @@ class ChannelTransportBase<Reply> {
 	}
 
 	/** Emit one send request and reject when the plugin reports a failure or the request times out. */
-	protected async sendRequest(
-		request: Omit<ChannelSendRequest, "requestId"> & { requestId?: string },
-	): Promise<string | undefined> {
+	protected async sendRequest(request: ChannelSendInput): Promise<string | undefined> {
 		const result = await sendViaBus(this.events, request, this.sendTimeoutMs);
 		if (!result.ok) {
 			const code = result.error?.code ?? "unknown";
@@ -327,12 +364,12 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 			provider: "feishu",
 			kind: "card",
 			to: { id: receiver.value, type: receiver.type },
-			card,
+			feishuCard: card,
 		});
 	}
 
 	async updateCard(messageId: string, card: object): Promise<void> {
-		await this.sendRequest({ provider: "feishu", kind: "card", update: { messageId }, card });
+		await this.sendRequest({ provider: "feishu", kind: "card", feishuCard: card, update: { messageId } });
 	}
 
 	waitForReply(timeoutMs: number, onNonText?: () => void, card?: CardReplyContext): Promise<RemoteReply | null> {
@@ -415,15 +452,23 @@ class TgBusTransport extends ChannelTransportBase<TgReply> implements TgTranspor
 
 	private async sendMessage(text: string, keyboard: object | undefined): Promise<TgSentMessage> {
 		// The tg question body carries HTML markup (mention link, escaped labels).
-		const request: Omit<ChannelSendRequest, "requestId"> = {
-			provider: "telegram",
-			kind: keyboard === undefined ? "text" : "card",
-			to: { id: this.tgCfg.chatId },
-			text,
-			parseMode: "HTML",
-		};
-		if (keyboard !== undefined) request.card = keyboard;
-		const messageId = await this.sendRequest(request);
+		const messageId =
+			keyboard === undefined
+				? await this.sendRequest({
+						provider: "telegram",
+						kind: "text",
+						to: { id: this.tgCfg.chatId },
+						text,
+						parseMode: "HTML",
+					})
+				: await this.sendRequest({
+						provider: "telegram",
+						kind: "card",
+						to: { id: this.tgCfg.chatId },
+						text,
+						telegramKeyboard: keyboard,
+						parseMode: "HTML",
+					});
 		return { chatId: Number(this.tgCfg.chatId), messageId: Number(messageId ?? 0) };
 	}
 
@@ -473,7 +518,7 @@ class TgBusTransport extends ChannelTransportBase<TgReply> implements TgTranspor
 			to: { id: this.tgCfg.chatId },
 			update: { messageId },
 			text,
-			card: buildTgDoneKeyboard(),
+			telegramKeyboard: buildTgDoneKeyboard(),
 			parseMode: "HTML",
 		});
 	}
