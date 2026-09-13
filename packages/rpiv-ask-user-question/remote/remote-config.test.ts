@@ -1,25 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { saveJsonConfigMock, loadRawMock, configPathMock, existsSyncMock } = vi.hoisted(() => ({
-	saveJsonConfigMock: vi.fn<(path: string, data: unknown) => boolean>(),
+const { saveConfigMock, loadRawMock } = vi.hoisted(() => ({
+	saveConfigMock: vi.fn<(data: unknown) => boolean>(),
 	loadRawMock: vi.fn<() => Record<string, unknown>>(() => ({})),
-	configPathMock: vi.fn<() => string>(),
-	existsSyncMock: vi.fn<(p: string) => boolean>(() => false),
 }));
 
-vi.mock("node:fs", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, existsSync: existsSyncMock };
-});
-
-vi.mock("@juicesharp/rpiv-config", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@juicesharp/rpiv-config")>();
-	return {
-		...actual,
-		saveJsonConfig: saveJsonConfigMock,
-		loadJsonConfigWithLegacyFallback: loadRawMock,
-		configPath: configPathMock,
-	};
+// setRemoteEnabled 现在走本包 config.ts 的 loadRawConfig / saveRawConfig（pi 原生路径优先 →
+// rpiv 默认兜底；只写 pi 原生路径），因此 mock 本包模块，而不是 rpiv-config。
+vi.mock("../config.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../config.js")>();
+	return { ...actual, loadRawConfig: loadRawMock, saveRawConfig: saveConfigMock };
 });
 
 import {
@@ -165,24 +155,20 @@ describe("getLocalTimeoutMs", () => {
 
 describe("setRemoteEnabled", () => {
 	beforeEach(() => {
-		saveJsonConfigMock.mockReset();
+		saveConfigMock.mockReset();
 		loadRawMock.mockReset();
-		configPathMock.mockReset();
 	});
 
 	it("merges the enabled flag into the existing remote object and preserves other fields", () => {
-		configPathMock.mockReturnValue("/xdg/config.json");
-		existsSyncMock.mockReturnValue(true);
 		loadRawMock.mockReturnValue({
 			collapseKey: "alt+o",
 			remote: { enabled: false, localTimeoutMs: 300_000, feishu: { appId: "a" } },
 		});
-		saveJsonConfigMock.mockReturnValue(true);
+		saveConfigMock.mockReturnValue(true);
 
 		expect(setRemoteEnabled(true)).toBe(true);
-		expect(saveJsonConfigMock).toHaveBeenCalledTimes(1);
-		const [path, data] = saveJsonConfigMock.mock.calls[0];
-		expect(path).toBe("/xdg/config.json");
+		expect(saveConfigMock).toHaveBeenCalledTimes(1);
+		const [data] = saveConfigMock.mock.calls[0];
 		expect(data).toEqual({
 			collapseKey: "alt+o",
 			remote: { enabled: true, localTimeoutMs: 300_000, feishu: { appId: "a" } },
@@ -190,23 +176,19 @@ describe("setRemoteEnabled", () => {
 	});
 
 	it("creates the remote object when the config has none", () => {
-		configPathMock.mockReturnValue("/xdg/config.json");
-		existsSyncMock.mockReturnValue(true);
 		loadRawMock.mockReturnValue({ collapseKey: "ctrl+]" });
-		saveJsonConfigMock.mockReturnValue(true);
+		saveConfigMock.mockReturnValue(true);
 
 		expect(setRemoteEnabled(false)).toBe(true);
-		expect(saveJsonConfigMock.mock.calls[0][1]).toEqual({
+		expect(saveConfigMock.mock.calls[0][0]).toEqual({
 			collapseKey: "ctrl+]",
 			remote: { enabled: false },
 		});
 	});
 
 	it("returns false when the save fails", () => {
-		configPathMock.mockReturnValue("/xdg/config.json");
-		existsSyncMock.mockReturnValue(true);
 		loadRawMock.mockReturnValue({});
-		saveJsonConfigMock.mockReturnValue(false);
+		saveConfigMock.mockReturnValue(false);
 		expect(setRemoteEnabled(true)).toBe(false);
 	});
 });

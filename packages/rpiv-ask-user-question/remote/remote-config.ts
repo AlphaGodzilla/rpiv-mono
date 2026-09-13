@@ -1,7 +1,4 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { configPath, loadJsonConfigWithLegacyFallback, saveJsonConfig } from "@juicesharp/rpiv-config";
+import { loadRawConfig, saveRawConfig } from "../config.js";
 
 /**
  * Remote-mode config for rpiv-ask-user-question.
@@ -167,26 +164,14 @@ export function getLocalTimeoutMs(cfg: RemoteConfig): number | undefined {
 	return cfg.localTimeoutMs !== undefined && isFeishuConfigured(cfg) ? cfg.localTimeoutMs : undefined;
 }
 
-const CONFIG_NAME = "rpiv-ask-user-question";
-
 /**
- * Path of the config file that `loadJsonConfigWithLegacyFallback` actually
- * read: the XDG-resolved path when present, otherwise the legacy path. Writes
- * must go to the same file so a `/remote-ask` toggle never splits config
- * across the two locations.
- */
-function effectiveConfigPath(): string {
-	const xdg = configPath("rpiv-ask-user-question");
-	return existsSync(xdg) ? xdg : join(homedir(), ".config", CONFIG_NAME, "config.json");
-}
-
-/**
- * Persist a change to `remote.enabled` (only), preserving every other field of
- * the config file. Returns false when the file could not be written.
+ * Persist a change to `remote.enabled` (only), preserving every other field.
  */
 export function setRemoteEnabled(enabled: boolean): boolean {
-	const raw = loadJsonConfigWithLegacyFallback<Record<string, unknown>>(CONFIG_NAME);
+	// 读走与 loadRawConfig 相同的链路（pi 原生路径优先 → rpiv 默认），但**只写 pi 原生路径**，
+	// 避免一次 toggle 把配置分裂到两个位置（与旧 effectiveConfigPath 的取舍一致）。
+	const raw = loadRawConfig();
 	const remote = raw.remote && typeof raw.remote === "object" ? (raw.remote as Record<string, unknown>) : {};
 	raw.remote = { ...remote, enabled };
-	return saveJsonConfig(effectiveConfigPath(), raw);
+	return saveRawConfig(raw);
 }

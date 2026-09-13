@@ -1,12 +1,14 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type AskUserQuestionConfig,
 	COLLAPSE_KEY_OFF,
 	DEFAULT_COLLAPSE_KEY,
 	loadConfig,
+	piConfigPath,
 	resolveCollapseKey,
+	saveRawConfig,
 } from "./config.js";
 
 describe("resolveCollapseKey", () => {
@@ -67,12 +69,12 @@ describe("loadConfig", () => {
 	// and write a per-test config inside it.
 	const home = process.env.HOME ?? "";
 	const configPath = join(home, ".config", "rpiv-ask-user-question", "config.json");
+	// pi 原生路径（优先）：getAgentDir() 在测试里 = $TEST_HOME/.pi/agent（setup.ts 已隔离 HOME 并清掉 PI_CODING_AGENT_DIR）
+	const piPath = piConfigPath();
 
-	// We can't mutate HOME here (configPath was resolved at import time, see
-	// the read in `loadJsonConfig` for the design rationale), so we test against
-	// the directory setup.ts points at and clean up after ourselves.
 	const removeConfig = (): void => {
 		if (existsSync(configPath)) rmSync(configPath);
+		if (existsSync(piPath)) rmSync(piPath);
 	};
 
 	afterEach(removeConfig);
@@ -82,8 +84,32 @@ describe("loadConfig", () => {
 		expect(loadConfig().collapseKey).toBeUndefined();
 	});
 
-	it("reads a valid JSON config", () => {
-		mkdirSync(join(home, ".config", "rpiv-ask-user-question"), { recursive: true });
+	it("falls back to the rpiv default path when the pi-native file is absent", () => {
+		removeConfig();
+		mkdirSync(dirname(configPath), { recursive: true });
+		writeFileSync(configPath, JSON.stringify({ collapseKey: "alt+o" }));
+		expect(loadConfig().collapseKey).toBe("alt+o");
+	});
+
+	it("prefers the pi-native path (~/.pi/agent/extensions/<name>/config.json) over the rpiv default", () => {
+		removeConfig();
+		mkdirSync(dirname(configPath), { recursive: true });
+		writeFileSync(configPath, JSON.stringify({ collapseKey: "ctrl+]" }));
+		mkdirSync(dirname(piPath), { recursive: true });
+		writeFileSync(piPath, JSON.stringify({ collapseKey: "alt+o" }));
+		expect(loadConfig().collapseKey).toBe("alt+o");
+	});
+
+	it("saveRawConfig writes to the pi-native path and creates the directory", () => {
+		removeConfig();
+		expect(saveRawConfig({ collapseKey: "alt+o" })).toBe(true);
+		expect(existsSync(piPath)).toBe(true);
+		expect(JSON.parse(readFileSync(piPath, "utf8"))).toEqual({ collapseKey: "alt+o" });
+	});
+
+	it("reads a valid JSON config from the rpiv default path", () => {
+		removeConfig();
+		mkdirSync(dirname(configPath), { recursive: true });
 		writeFileSync(
 			configPath,
 			JSON.stringify({ collapseKey: "alt+o", guidance: { promptSnippet: "x" } } satisfies AskUserQuestionConfig),

@@ -1,5 +1,13 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { GuidanceFields } from "@juicesharp/rpiv-config";
-import { loadJsonConfigWithLegacyFallback, validateGuidanceFields } from "@juicesharp/rpiv-config";
+import {
+	loadJsonConfig,
+	loadJsonConfigWithLegacyFallback,
+	saveJsonConfig,
+	validateGuidanceFields,
+} from "@juicesharp/rpiv-config";
 import type { RemoteConfig } from "./remote/remote-config.js";
 
 /** Key spec for the overlay collapse/expand shortcut, e.g. `"ctrl+]"` or `"alt+o"`. */
@@ -71,8 +79,36 @@ export function resolveCollapseKey(config: Pick<AskUserQuestionConfig, "collapse
 	return isValidCollapseKeySpec(raw) ? raw : DEFAULT_COLLAPSE_KEY;
 }
 
+/** 配置目录名（= 包名去掉 scope），也是 `~/.pi/agent/extensions/<name>/` 的子目录名 */
+export const CONFIG_NAME = "rpiv-ask-user-question";
+
+/**
+ * pi 原生配置路径（优先）：`~/.pi/agent/extensions/rpiv-ask-user-question/config.json`。
+ * 与 pi-mono 各扩展的约定一致（见 pi-mono/AGENTS.md「配置与运行数据一律放 extensions 目录」）。
+ */
+export function piConfigPath(): string {
+	return join(getAgentDir(), "extensions", CONFIG_NAME, "config.json");
+}
+
+/**
+ * 读取原始配置对象，顺序：
+ *   1. pi 原生路径 `~/.pi/agent/extensions/<包名>/config.json`
+ *   2. rpiv 默认路径 `$XDG_CONFIG_HOME/<包名>/config.json`（rpiv-config 再兜底 `~/.config/<包名>/config.json`）
+ * 文件缺失或非法时返回 `{}`（两个 loader 都是 fail-soft）。
+ */
+export function loadRawConfig(): Record<string, unknown> {
+	const primary = piConfigPath();
+	if (existsSync(primary)) return loadJsonConfig<Record<string, unknown>>(primary);
+	return loadJsonConfigWithLegacyFallback<Record<string, unknown>>(CONFIG_NAME);
+}
+
+/** 写回原始配置：只写 pi 原生路径（迁移后不再分裂到两处）。 */
+export function saveRawConfig(data: unknown): boolean {
+	return saveJsonConfig(piConfigPath(), data);
+}
+
 export function loadConfig(): AskUserQuestionConfig {
-	return loadJsonConfigWithLegacyFallback<AskUserQuestionConfig>("rpiv-ask-user-question");
+	return loadRawConfig() as AskUserQuestionConfig;
 }
 
 export { validateGuidanceFields };

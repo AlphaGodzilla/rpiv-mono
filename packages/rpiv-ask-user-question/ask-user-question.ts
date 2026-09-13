@@ -72,10 +72,10 @@ const ERROR_NO_CUSTOM_UI =
 	"Error: this client cannot render the questionnaire (custom UI is unavailable, e.g. RPC/ACP hosts such as Zed or Paseo). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
 
 const ERROR_REMOTE_CHANNEL_FAILED =
-	"Error: the Feishu remote channel is unavailable (check remote.feishu.receivers in ~/.config/rpiv-ask-user-question/config.json and that the pi-channel plugin is installed with working Feishu credentials). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
+	"Error: the Feishu remote channel is unavailable (check remote.feishu.receivers in ~/.pi/agent/extensions/rpiv-ask-user-question/config.json, falling back to ~/.config/rpiv-ask-user-question/config.json, and that the pi-channel plugin is installed with working Feishu credentials). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 
 const ERROR_TG_CHANNEL_FAILED =
-	"Error: the Telegram remote channel is unavailable (check remote.tg.chatId/userId in ~/.config/rpiv-ask-user-question/config.json and that the pi-channel plugin is installed with a working bot token). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
+	"Error: the Telegram remote channel is unavailable (check remote.tg.chatId/userId in ~/.pi/agent/extensions/rpiv-ask-user-question/config.json, falling back to ~/.config/rpiv-ask-user-question/config.json, and that the pi-channel plugin is installed with a working bot token). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead.";
 const ERROR_SESSION_LOAD_FAILED =
 	"Error: the questionnaire UI failed to load — the host's installed dependencies were likely replaced or removed on disk while Pi was running (e.g. a package-manager install touched the store). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, and tell the user that restoring this tool requires repairing the install if needed and restarting Pi.";
 

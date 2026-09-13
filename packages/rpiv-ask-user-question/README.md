@@ -44,7 +44,7 @@ When the model asks several things at once, `Tab` moves between them and a Submi
 - **Works outside the terminal too** — in RPC and ACP hosts such as the VS Code pendant or Zed the questionnaire walks through the host's native dialogs, and in non-interactive runs the tool is removed from the model's tool list instead of failing every call.
 - **Ask from your phone** — with the pi-channel plugin and a Feishu receiver configured, `remote.enabled` sends every question to Feishu as interactive cards with clickable option buttons (group chats need an @), and `localTimeoutMs` makes an unanswered local dialog hand its remaining questions to Feishu after a delay. Toggle it live with `/rpiv-ask-user-question remote`.
 ## Configuration
-Optional. Settings live in `~/.config/rpiv-ask-user-question/config.json`; the file is read, never written.
+Optional. Settings live in `~/.pi/agent/extensions/rpiv-ask-user-question/config.json` (falls back to the rpiv default `~/.config/rpiv-ask-user-question/config.json`); the file is read, never written.
 
 | Setting | What it does | Default |
 | --- | --- | --- |

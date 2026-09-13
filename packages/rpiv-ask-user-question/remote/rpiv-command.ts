@@ -75,7 +75,7 @@ async function handleRemote(ctx: ExtensionCommandContext, cfg: RemoteConfig, act
 	} else if (action === "on") {
 		if (!isFeishuConfigured(cfg)) {
 			ctx.ui.notify(
-				"Cannot enable remote mode: Feishu receivers are missing. Edit ~/.config/rpiv-ask-user-question/config.json and add remote.feishu.receivers (the app credentials live in the pi-channel plugin).",
+				"Cannot enable remote mode: Feishu receivers are missing. Edit ~/.pi/agent/extensions/rpiv-ask-user-question/config.json (or the rpiv default ~/.config/rpiv-ask-user-question/config.json) and add remote.feishu.receivers (the app credentials live in the pi-channel plugin).",
 				"error",
 			);
 			return;
@@ -117,7 +117,7 @@ async function handlePrd(
 	} else if (action === "on") {
 		if (!isTgConfigured(cfg)) {
 			ctx.ui.notify(
-				"Cannot enable ask-prd: Telegram chatId/userId are missing. Edit ~/.config/rpiv-ask-user-question/config.json and add remote.tg.chatId / userId (the bot token lives in the pi-channel plugin).",
+				"Cannot enable ask-prd: Telegram chatId/userId are missing. Edit ~/.pi/agent/extensions/rpiv-ask-user-question/config.json (or the rpiv default ~/.config/rpiv-ask-user-question/config.json) and add remote.tg.chatId / userId (the bot token lives in the pi-channel plugin).",
 				"error",
 			);
 			return;

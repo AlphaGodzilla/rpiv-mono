@@ -6,12 +6,12 @@ wrong.
 ## The config file
 
 ```
-~/.config/rpiv-ask-user-question/config.json
+~/.pi/agent/extensions/rpiv-ask-user-question/config.json
 ```
 
 The file is optional — with no config at all, every setting takes its default. During
 normal operation the package only ever *reads* the file; the one exception is the
-`/rpiv-ask-user-question remote` command, which writes back the `remote.enabled` flag (and nothing else). The
+`/rpiv-ask-user-question remote` command, which writes back the `remote.enabled` flag (and nothing else) to the pi-native path. The
 package never creates, chmods or rewrites the file otherwise, so its permissions are
 whatever you give it.
 
@@ -44,16 +44,20 @@ A complete example:
 
 ### Where the file is looked up
 
-1. `$XDG_CONFIG_HOME/rpiv-ask-user-question/config.json`, if `XDG_CONFIG_HOME` is set,
-   non-empty and absolute. A leading `~` is expanded first; a relative value is ignored.
-   Unset or ignored, the directory falls back to `~/.config`.
-2. If that file does not exist, the legacy path `~/.config/rpiv-ask-user-question/config.json`
-   is read. This path deliberately ignores `XDG_CONFIG_HOME`, so an existing config keeps
-   working after you set the variable.
+1. `~/.pi/agent/extensions/rpiv-ask-user-question/config.json` — the **pi-native path**
+   (since 2026-09-13). The agent dir comes from Pi (`PI_CODING_AGENT_DIR` when set, otherwise
+   `~/.pi/agent`), so the file sits next to the other pi extensions' configs.
+2. If that file does not exist, the **rpiv default**: `$XDG_CONFIG_HOME/rpiv-ask-user-question/config.json`
+   when `XDG_CONFIG_HOME` is set, non-empty and absolute (a leading `~` is expanded first, a
+   relative value is ignored); unset or ignored, it falls back to `~/.config/rpiv-ask-user-question/config.json`
+   — which is also the path read as the pre-XDG legacy location, so an existing config keeps
+   working after you set `XDG_CONFIG_HOME`.
 3. Neither present: all defaults.
 
-If the XDG-path file exists, its result wins even when it is malformed — there is no
-second chance at the legacy path.
+The lookup is first-match-wins: once the pi-native file exists, a malformed one still wins over
+a valid rpiv-default file — there is no second chance at the fallback path. Writes always go to
+the pi-native path (the directory is created on demand), so a toggle can never split the config
+across the two locations.
 
 ### When the file is invalid
 
