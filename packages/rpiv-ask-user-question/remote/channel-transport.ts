@@ -11,7 +11,7 @@ import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type Tg
  * `ag-pi-channel:send` requests and listens for `ag-pi-channel:inbound`
  * events. The constants, payload types, `readAckText` convention and
  * `sendViaBus` / `statusViaBus` below are a copy of
- * `pi-mono/packages/pi-channel/lib/events.ts`
+ * `ag-pi-mono/packages/pi-channel/lib/events.ts`
  * — cross-repo imports are not possible, so the contract MUST stay in sync:
  * the plugin is the other side of these events and the requestId correlation
  * in `sendViaBus` is what matches a result to its request. The only intended
@@ -168,7 +168,7 @@ export const DEFAULT_SEND_TIMEOUT_MS = 10_000;
 
 /**
  * 请求/响应助手：emit `ag-pi-channel:send` 并等 `ag-pi-channel:send:result`。
- * 与 `pi-mono/packages/pi-channel/lib/events.ts` 的 `sendViaBus` 保持同一契约。
+ * 与 `ag-pi-mono/packages/pi-channel/lib/events.ts` 的 `sendViaBus` 保持同一契约。
  */
 export async function sendViaBus(
 	events: EventsLike,
@@ -209,7 +209,7 @@ export const DEFAULT_STATUS_TIMEOUT_MS = 1_500;
 
 /**
  * 查询插件状态（连接情况 / 配置路径 / 脱敏账号），超时返回 `null`。
- * 与 `pi-mono/packages/pi-channel/lib/events.ts` 的 `statusViaBus` 同语义
+ * 与 `ag-pi-mono/packages/pi-channel/lib/events.ts` 的 `statusViaBus` 同语义
  * （requestId 关联响应 + 超时返回 `null`，绝不抛异常）；默认上限压到 1.5s ——
  * 它只服务出站前置探测，不该像真正的发送那样等满 10s。
  */

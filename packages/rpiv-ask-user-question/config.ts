@@ -109,7 +109,7 @@ export const CONFIG_NAME = "rpiv-ask-user-question";
 
 /**
  * pi 原生配置路径（优先）：`~/.pi/agent/extensions/rpiv-ask-user-question/config.json`。
- * 与 pi-mono 各扩展的约定一致（见 pi-mono/AGENTS.md「配置与运行数据一律放 extensions 目录」）。
+ * 与 ag-pi-mono 各扩展的约定一致（见 ag-pi-mono/AGENTS.md「配置与运行数据一律放 extensions 目录」）。
  */
 export function piConfigPath(): string {
 	return join(getAgentDir(), "extensions", CONFIG_NAME, "config.json");
