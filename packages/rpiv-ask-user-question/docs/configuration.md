@@ -81,6 +81,7 @@ type are likewise dropped back to their default without a warning.
 | `guidance.promptSnippet` | One-line snippet describing the tool in the system prompt. | built-in snippet |
 | `guidance.promptGuidelines` | List of usage guidelines given to the model. | 4 built-in guidelines |
 | `remote` | Feishu remote-asking mode (see below). | off |
+| `debug` | Diagnostics switch (top level). When on, the remote transports append their timeline to `~/.pi/agent/extensions/rpiv-ask-user-question/debug.log` — send durations, when a wait started/resolved, every inbound event and why a click was dropped. Pair it with pi-channel's own `debug` flag (both files share the clock) when diagnosing card latency; with it off no file is written. | off |
 
 ### `collapseKey`
 
@@ -141,7 +142,7 @@ absent, behavior is identical to a version without this feature.
 | `timeoutMs` | How long to wait for a Feishu reply per question. On timeout the unanswered questions are re-asked in the main conversation instead of being treated as a decline. | `600000` (10 min) |
 | `cancelWords` | Exact-match words (after trim, case-insensitive) that abort the remote questionnaire. | `["取消", "cancel"]` |
 | `feishu.receivers` | Who receives the questions. Each entry is `{ "type", "value" }`; `type` is one of `open_id`, `user_id`, `union_id`, `email`, `chat_id` (the native `receive_id_type` values — no phone lookup). Invalid entries are dropped. | `[]` |
-| `feishu.useCards` | Send questions as interactive cards. Single-select questions get one clickable button per option plus a Cancel button (the chosen button is checked ✓ and the rest disabled after a click); multi-select questions render the options in the card but still take a text reply (`1,2`). Card sends fall back to plain text automatically. | `true` |
+| `feishu.useCards` | Send questions as interactive cards. Single-select questions get one clickable button per option plus a Cancel button (the chosen button is checked ✓ and the rest disabled after a click); multi-select questions render the options in the card but still take a text reply (`1,2`). Every card also carries a 「回到 TUI」 button that hands the questionnaire back to the terminal (see below). Card sends fall back to plain text automatically. | `true` |
 
 Behavior matrix (when a Feishu receiver is configured and the pi-channel plugin provides the credentials):
 
@@ -167,13 +168,18 @@ images) are ignored with a hint. A cancel word cancels the whole questionnaire
 (`cancelled: true`); a per-question timeout instead recovers to the main
 conversation — the still-unanswered questions are re-asked in the local dialog
 (and the local-timeout handoff comes back to the local ask too if Feishu stays
-silent).
+silent). The card's 「回到 TUI」 button — or the reserved `tui` reply (also `本地`, and it works
+in text mode too) — hands the questionnaire back to the terminal the same way: nothing is
+answered for the pending question, every card sent for it is locked, and the still
+unanswered questions are asked locally, keeping the answers already given on Feishu.
 
 With `feishu.useCards` (default) a single-select question arrives as an interactive card
 with one button per option plus a Cancel button. Clicking a button answers immediately
 and locks the card — the chosen button shows a ✓, every other button (including Cancel)
 is disabled so a repeated click cannot double-fire. Text replies keep working alongside
-buttons, and card send failures fall back to plain text.
+buttons, and card send failures fall back to plain text. Next to Cancel every card also
+carries a 「回到 TUI」 button: clicking it answers nothing, locks the card (all buttons
+disabled, a "已切回 TUI 作答" notice) and continues the questionnaire in the local dialog.
 
 
 #### `/rpiv-ask-user-question` command

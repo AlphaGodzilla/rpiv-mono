@@ -49,8 +49,15 @@ button gains a ✓, every other button is disabled. Multi-select questions rende
 options in the card but keep the free-text interaction (`1,2` reply) since a single
 click cannot express a selection list; the card still carries a Cancel button.
 
+Next to Cancel every card also carries a 「回到 TUI」 button. Clicking it — or replying the
+reserved `tui` (or `本地`) word, which works in plain-text mode too — answers nothing and
+hands the questionnaire back to the terminal: the still-unanswered questions are re-asked
+in the local dialog (TUI overlay or RPC walker), the answers already given on Feishu are
+kept, and every card sent for that question is locked (all buttons disabled plus a
+"已切回 TUI 作答" line) so the Feishu side cannot answer it any more.
+
 Card-callback acks are handled by the pi-channel plugin: every button value carries an
-`ackText` toast ("已选择"/"已取消") and the plugin answers the platform within the 3-second
+`ackText` toast ("已选择"/"已取消"/"已切回 TUI") and the plugin answers the platform within the 3-second
 window (Feishu card callback response / Telegram `answerCallbackQuery`). Locking an
 answered card is a normal bus update (`update.messageId`), because a Feishu callback
 response cannot carry a V2 card body.
@@ -61,7 +68,13 @@ disables cards entirely.
 Before the first send the channel is probed once (1.5 s): when the pi-channel plugin is
 not loaded (`plugin_missing`) or has no Feishu configuration (`not_configured`), the
 questionnaire opens the local dialog with a warning instead of waiting out the send
-timeout. Other send failures return an envelope telling the model the user never saw the
+timeout — the very first send also asks the plugin for inbound readiness first (`ag-pi-channel:connect`),
+so the first card cannot land in Feishu while the long connection is still warming up: taps in that
+window would be dropped and need a retry. The questionnaire insists on **exclusive** inbound while it
+runs: the transport holds the connection from that `connect` until its `close()` releases it
+(`ag-pi-channel:release`), because Feishu delivers each card callback to only ONE of an app's several
+long connections — a pi process that quietly keeps one would steal the clicks (they get acked as a
+toast but never answered). Other send failures return an envelope telling the model the user never saw the
 questions and to ask them as plain chat text — explicitly not a decline. The message names
 the error code (`not_configured`, `permission_denied`, …), or `timeout` when the plugin did
 not answer the request in time; the user also gets an error notification with the failure's
