@@ -1,14 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeQuestion } from "../test-fixtures.js";
 import {
+	CHANNEL_CONNECT,
+	CHANNEL_CONNECT_RESULT,
 	CHANNEL_INBOUND,
+	CHANNEL_RELEASE,
+	CHANNEL_RELEASE_RESULT,
 	CHANNEL_SEND,
 	CHANNEL_SEND_RESULT,
 	CHANNEL_STATUS,
 	CHANNEL_STATUS_RESULT,
+	type ChannelConnectRequest,
+	type ChannelConnectResult,
 	type ChannelInboundAction,
 	type ChannelInboundEvent,
 	type ChannelInboundMessage,
+	type ChannelReleaseRequest,
+	type ChannelReleaseResult,
 	type ChannelSendRequest,
 	type ChannelSendResult,
 	type ChannelStatusRequest,
@@ -32,6 +40,16 @@ class FakeBus implements EventsLike {
 	private readonly handlers = new Map<string, Set<(data: unknown) => void>>();
 	readonly sends: ChannelSendRequest[] = [];
 	/** Number of `ag-pi-channel:status` probes — asserted to prove memoization. */
+	readonly connections: ChannelConnectRequest[] = [];
+	readonly releases: ChannelReleaseRequest[] = [];
+	/** 操作顺序（status/connect/send）——断言「connect 请求先于首次发送」。 */
+	readonly order: string[] = [];
+	/** Return `undefined` to stay silent (an older plugin without the release contract). */
+	releaseResponder: (request: ChannelReleaseRequest) => ChannelReleaseResult | undefined = (request) => ({
+		requestId: request.requestId,
+		ok: true,
+		connected: false,
+	});
 	statusQueries = 0;
 	/** Return `undefined` to stay silent (the readiness probe then times out → plugin_missing). */
 	statusResponder: (request: ChannelStatusRequest) => ChannelStatusResult | undefined = (request) => ({
@@ -43,6 +61,12 @@ class FakeBus implements EventsLike {
 		],
 	});
 	/** Return `undefined` to stay silent (the send then times out). */
+	/** Return `undefined` to stay silent (an older plugin without the connect contract). */
+	connectResponder: (request: ChannelConnectRequest) => ChannelConnectResult | undefined = (request) => ({
+		requestId: request.requestId,
+		ok: true,
+		connected: true,
+	});
 	responder: (request: ChannelSendRequest) => ChannelSendResult | undefined = (request) => ({
 		requestId: request.requestId,
 		ok: true,
@@ -50,13 +74,31 @@ class FakeBus implements EventsLike {
 	});
 
 	emit(channel: string, data: unknown): void {
+		if (channel === CHANNEL_RELEASE) {
+			this.order.push("release");
+			const request = data as ChannelReleaseRequest;
+			this.releases.push(request);
+			const result = this.releaseResponder(request);
+			if (result !== undefined) queueMicrotask(() => this.deliver(CHANNEL_RELEASE_RESULT, result));
+			return;
+		}
+		if (channel === CHANNEL_CONNECT) {
+			this.order.push("connect");
+			const request = data as ChannelConnectRequest;
+			this.connections.push(request);
+			const result = this.connectResponder(request);
+			if (result !== undefined) queueMicrotask(() => this.deliver(CHANNEL_CONNECT_RESULT, result));
+			return;
+		}
 		if (channel === CHANNEL_STATUS) {
+			this.order.push("status");
 			this.statusQueries += 1;
 			const status = this.statusResponder(data as ChannelStatusRequest);
 			if (status !== undefined) queueMicrotask(() => this.deliver(CHANNEL_STATUS_RESULT, status));
 			return;
 		}
 		if (channel === CHANNEL_SEND) {
+			this.order.push("send");
 			const request = data as ChannelSendRequest;
 			this.sends.push(request);
 			const result = this.responder(request);
@@ -341,7 +383,8 @@ describe("feishu transport over the event bus", () => {
 		bus.inbound(feishuAction());
 
 		await expect(pending).resolves.toMatchObject({ text: "2", chatId: "oc_p2p", messageId: "om_card" });
-		expect(bus.sends).toHaveLength(1);
+		// 锁定卡片的 patch 要先经过 sendRequest 的入站 connect（记忆化）→ 多一跳微任务
+		await vi.waitFor(() => expect(bus.sends).toHaveLength(1));
 		const update = bus.sends[0];
 		expect(update).toMatchObject({ provider: "feishu", kind: "card", update: { messageId: "om_card" } });
 		const lockedCard = expectFeishuCard(update);
@@ -349,6 +392,7 @@ describe("feishu transport over the event bus", () => {
 		expect(feishuButtonValues(lockedCard.feishuCard)).toEqual([
 			{ q: "0", o: "1", ackText: "已选择" },
 			{ q: "0", o: "2", ackText: "已选择" },
+			{ q: "0", t: "1", ackText: "已切回 TUI" },
 			{ q: "0", c: "1", ackText: "已取消" },
 		]);
 	});
@@ -362,7 +406,62 @@ describe("feishu transport over the event bus", () => {
 		bus.inbound(feishuAction({ value: { q: "0", c: "1", ackText: "已取消" } }));
 
 		await expect(pending).resolves.toMatchObject({ text: "取消", messageId: "om_card" });
+		await vi.waitFor(() => expect(bus.sends).toHaveLength(1));
 		expect(expectFeishuCard(bus.sends[0]).feishuCard).toEqual(buildQuestionCard(question, 0, undefined, true));
+	});
+
+	it("hands the flow back to the TUI on a 「回到 TUI」 click and locks every card of the question", async () => {
+		const bus = new FakeBus();
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+		const question = makeQuestion();
+
+		const pending = transport.waitForReply(1_000, undefined, {
+			question,
+			index: 0,
+			cancelWord: "取消",
+			cardMessageIds: ["om_card_a", "om_card_b"],
+		});
+		bus.inbound(feishuAction({ value: { q: "0", t: "1", ackText: "已切回 TUI" } }));
+
+		await expect(pending).resolves.toMatchObject({ text: "", messageId: "om_card", tuiHandoff: true });
+		await vi.waitFor(() => expect(bus.sends).toHaveLength(2));
+		for (const send of bus.sends) {
+			expect(expectFeishuCard(send).update).toBeDefined();
+			expect(expectFeishuCard(send).feishuCard).toEqual(buildQuestionCard(question, 0, undefined, false, true));
+		}
+		expect(bus.sends.map((send) => expectFeishuCard(send).update)).toEqual([
+			{ messageId: "om_card_a" },
+			{ messageId: "om_card_b" },
+		]);
+	});
+
+	it("treats the reserved 「tui」 text reply as a handoff and locks the question's cards", async () => {
+		const bus = new FakeBus();
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+		const question = makeQuestion();
+
+		const pending = transport.waitForReply(1_000, undefined, {
+			question,
+			index: 0,
+			cancelWord: "取消",
+			cardMessageIds: ["om_card_a"],
+		});
+		bus.inbound(feishuMessage({ text: "  TUI " }));
+
+		await expect(pending).resolves.toMatchObject({ text: "", tuiHandoff: true });
+		await vi.waitFor(() => expect(bus.sends).toHaveLength(1));
+		expect(expectFeishuCard(bus.sends[0]).update).toEqual({ messageId: "om_card_a" });
+	});
+
+	it("accepts the reserved 「tui」 reply in text mode, where no card context is passed", async () => {
+		const bus = new FakeBus();
+		const transport = await createFeishuTransport(feishuCfg({ useCards: false }), { events: bus });
+
+		const pending = transport.waitForReply(1_000);
+		bus.inbound(feishuMessage({ text: "本地" }));
+
+		await expect(pending).resolves.toMatchObject({ text: "", tuiHandoff: true });
+		expect(bus.sends).toHaveLength(0);
 	});
 
 	it("ignores clicks on a stale card (q mismatch) and clicks without a card context", async () => {
@@ -518,7 +617,7 @@ describe("telegram transport over the event bus", () => {
 		bus.inbound(tgAction());
 
 		await expect(pending).resolves.toEqual({ text: "2", chatId: -100123, messageId: 222 });
-		expect(bus.sends).toHaveLength(1);
+		await vi.waitFor(() => expect(bus.sends).toHaveLength(1));
 		const finalize = expectTelegramCard(bus.sends[0]);
 		expect(finalize).toMatchObject({
 			provider: "telegram",
@@ -565,5 +664,107 @@ describe("telegram transport over the event bus", () => {
 		await transport.close();
 
 		await expect(pending).resolves.toBeNull();
+	});
+});
+
+describe("入站就绪（connect）：发送前把冷启动丢击窗口消掉", () => {
+	it("状态显示未连接时，先请求 connect 再发首条（顺序可断言）", async () => {
+		const bus = new FakeBus();
+		bus.statusResponder = (request) => ({
+			requestId: request.requestId,
+			configPath: "/tmp/rpiv-test/pi-channel.json",
+			providers: [{ provider: "feishu", configured: true, connected: false }],
+		});
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+
+		await transport.send({ type: "email", value: "me@example.com" }, "hi");
+
+		// 卡片/文本先落地飞书、长连接后握手 → 点击无处投递；这里要求 connect 先于 send。
+		expect(bus.connections).toHaveLength(1);
+		expect(bus.connections[0]).toMatchObject({ provider: "feishu" });
+		expect(bus.order).toEqual(["status", "connect", "send"]);
+		expect(bus.sends).toHaveLength(1);
+	});
+
+	it("status 已连接时也照发 connect：持有是计数语义，必须与 close 的 release 配对", async () => {
+		const bus = new FakeBus();
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+
+		await transport.send({ type: "email", value: "me@example.com" }, "hi");
+
+		// 「已连接就跳过」会留下竞态：上一份问卷的 release 在下一份问卷进行中把连接关掉。
+		expect(bus.connections).toHaveLength(1);
+		expect(bus.order).toEqual(["status", "connect", "send"]);
+	});
+
+	it("connect 请求只发一次（同一 transport 内记忆化）", async () => {
+		const bus = new FakeBus();
+		bus.statusResponder = (request) => ({
+			requestId: request.requestId,
+			configPath: "/tmp/rpiv-test/pi-channel.json",
+			providers: [{ provider: "feishu", configured: true, connected: false }],
+		});
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+		const receiver = { type: "email" as const, value: "me@example.com" };
+
+		await transport.send(receiver, "one");
+		await transport.send(receiver, "two");
+		await transport.updateCard("om_1", { schema: "2.0" });
+
+		expect(bus.connections).toHaveLength(1);
+		expect(bus.sends).toHaveLength(3);
+	});
+
+	it("插件不支持 connect（无回复）时不阻塞发送，也不抛错", async () => {
+		const bus = new FakeBus();
+		bus.statusResponder = (request) => ({
+			requestId: request.requestId,
+			configPath: "/tmp/rpiv-test/pi-channel.json",
+			providers: [{ provider: "feishu", configured: true, connected: false }],
+		});
+		bus.connectResponder = () => undefined; // 老版本插件：装作没听见
+		const transport = await createFeishuTransport(feishuCfg(), {
+			events: bus,
+			connectTimeoutMs: 20,
+		});
+
+		await expect(transport.send({ type: "email", value: "me@example.com" }, "hi")).resolves.toBeUndefined();
+
+		expect(bus.connections).toHaveLength(1);
+		expect(bus.sends).toHaveLength(1); // 发送照常发生
+	});
+
+	it("close() 释放入站持有（release），与 connect 配对且只释放一次", async () => {
+		const bus = new FakeBus();
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus });
+
+		await transport.send({ type: "email", value: "me@example.com" }, "hi");
+		await transport.close();
+
+		expect(bus.releases).toHaveLength(1);
+		expect(bus.releases[0]).toMatchObject({ provider: "feishu" });
+		expect(bus.order).toEqual(["status", "connect", "send", "release"]);
+
+		// 幂等：重复 close 不再释放（否则会把别的消费方的持有一起减掉）。
+		await transport.close();
+		expect(bus.releases).toHaveLength(1);
+	});
+
+	it("没有成功持有入站时 close() 不发 release", async () => {
+		const bus = new FakeBus();
+		bus.connectResponder = (request) => ({
+			requestId: request.requestId,
+			ok: false,
+			connected: false,
+			error: { code: "outbound_only", message: "feishu inbound disabled" },
+		});
+		const transport = await createFeishuTransport(feishuCfg(), { events: bus, connectTimeoutMs: 20 });
+
+		await transport.send({ type: "email", value: "me@example.com" }, "hi");
+		await transport.close();
+
+		expect(bus.releases).toHaveLength(0);
+		// close 时没有 release，因此后续也没有插件往返（顺序里只剩 status/connect/send）。
+		expect(bus.order).toEqual(["status", "connect", "send"]);
 	});
 });

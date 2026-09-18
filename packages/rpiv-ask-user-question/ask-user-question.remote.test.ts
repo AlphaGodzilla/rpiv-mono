@@ -367,6 +367,60 @@ describe("ask_user_question — Feishu remote as primary mode", () => {
 		const text = (result as { content: { text: string }[] }).content[0].text;
 		expect(text).toContain("User declined to answer questions");
 	});
+
+	it("returns to the local dialog when the user asks for the TUI, keeping the Feishu answers", async () => {
+		const transport = makeTransport();
+		vi.mocked(transport.waitForReply)
+			.mockResolvedValueOnce({ text: "1", chatId: "oc_x", chatType: "p2p", senderId: "ou_1", messageId: "om_1" })
+			.mockResolvedValueOnce({
+				text: "",
+				chatId: "oc_x",
+				chatType: "p2p",
+				senderId: "ou_1",
+				messageId: "om_card",
+				tuiHandoff: true,
+			});
+		createFeishuTransportMock.mockResolvedValue(transport);
+		const h = makeHarness();
+		const twoQuestions = makeParams({
+			questions: [
+				{
+					question: "Q1",
+					header: "H1",
+					options: [
+						{ label: "A", description: "a" },
+						{ label: "B", description: "b" },
+					],
+				},
+				{
+					question: "Q2",
+					header: "H2",
+					options: [
+						{ label: "X", description: "x" },
+						{ label: "Y", description: "y" },
+					],
+				},
+			],
+		});
+
+		const pending = h.execute("t1", twoQuestions, undefined, undefined, h.ctx);
+
+		// Q1 answered on Feishu; 「回到 TUI」 on Q2 → the local dialog re-asks Q2.
+		await vi.waitFor(() => {
+			expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+		});
+		h.resolveCustom({
+			answers: [{ questionIndex: 0, question: "Q2", kind: "option", answer: "Y" }],
+			cancelled: false,
+		});
+		const result = await pending;
+
+		const content = (result as { content: { text: string }[] }).content[0].text;
+		expect(content).toContain('"Q1"="A"');
+		expect(content).toContain('"Q2"="Y"');
+		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Continuing in the terminal"), "info");
+		expect(transport.close).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("ask_user_question — local timeout fallback", () => {
@@ -536,5 +590,38 @@ describe("ask_user_question — local timeout fallback", () => {
 
 		const content = (result as { content: { text: string }[] }).content[0].text;
 		expect(content).toContain('"Which library?"="B"');
+	});
+
+	it("re-opens the local dialog when the user returns to the TUI from the Feishu fallback", async () => {
+		loadConfigMock.mockReturnValue({ remote: fullRemoteConfig(false, 5_000) });
+		const transport = makeTransport();
+		vi.mocked(transport.waitForReply).mockResolvedValue({
+			text: "",
+			chatId: "oc_x",
+			chatType: "p2p",
+			senderId: "ou_1",
+			messageId: "om_card",
+			tuiHandoff: true,
+		});
+		createFeishuTransportMock.mockResolvedValue(transport);
+		const h = makeHarness();
+
+		const pending = h.execute("t1", makeParams(), undefined, undefined, h.ctx);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(h.ctx.ui.custom).toHaveBeenCalledTimes(1);
+
+		// Local timeout fires → the question goes to Feishu → 「回到 TUI」 → the local
+		// dialog opens again for the still-unanswered question.
+		await vi.advanceTimersByTimeAsync(4_900);
+		expect(h.ctx.ui.custom).toHaveBeenCalledTimes(2);
+		h.resolveCustom({
+			answers: [{ questionIndex: 0, question: "Which library?", kind: "option", answer: "B" }],
+			cancelled: false,
+		});
+		const result = await pending;
+
+		const content = (result as { content: { text: string }[] }).content[0].text;
+		expect(content).toContain('"Which library?"="B"');
+		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Continuing in the terminal"), "info");
 	});
 });

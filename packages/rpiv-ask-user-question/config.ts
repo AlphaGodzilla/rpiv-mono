@@ -26,7 +26,12 @@ export interface AskUserQuestionConfig {
 	 * Pass `"off"` to disable the collapse shortcut entirely.
 	 */
 	collapseKey?: CollapseKeySpec;
-	/** Raw `remote` config; parse with `loadRemoteConfig` for guarded access. */
+	/**
+	 * 诊断开关（顶层 `debug`，缺省关）：打开后 Feishu/Telegram transport 把收发时序写进
+	 * `~/.pi/agent/extensions/rpiv-ask-user-question/debug.log`（发送耗时、等待开始/结束、每条入站事件
+	 * 与丢弃原因）。排查「点卡片要连点几次」「哪一段慢」时开它，平时关着（默认不产生该文件）。
+	 */
+	debug?: boolean;
 	remote?: RemoteConfig;
 }
 

@@ -38,5 +38,7 @@
   "remote.please_text": "Please reply with text (stickers/images cannot answer)",
   "remote.fallback_notify": "Local wait timed out — remaining questions sent to Feishu",
   "remote.timeout_recover": "No reply from Feishu — asking in the main conversation instead",
-  "remote.tg_sent": "Question sent to Telegram — the @-user can reply there"
+  "remote.tg_sent": "Question sent to Telegram — the @-user can reply there",
+  "remote.msg.tui_hint": "Reply \"tui\" to answer the remaining questions in the terminal instead.",
+  "remote.tui_handoff": "Continuing in the terminal — asking the remaining questions here"
 }

@@ -30,7 +30,12 @@ import {
 	type RemoteConfig,
 	shouldUseRemote,
 } from "./remote/remote-config.js";
-import { type RemoteOutcome, type RemoteQuestion, runRemoteQuestionnaire } from "./remote/remote-questionnaire.js";
+import {
+	type RemoteOutcome,
+	type RemoteQuestion,
+	runRemoteQuestionnaire,
+	type TgOutcome,
+} from "./remote/remote-questionnaire.js";
 import { runTgQuestionnaire } from "./remote/tg-questionnaire.js";
 // Static import is fine — rpc-fallback pulls only types + the i18n bridge,
 // none of the ~560ms TUI render graph that QuestionnaireSession lazy-loads.
@@ -43,6 +48,7 @@ import {
 	MAX_OPTIONS,
 	MAX_QUESTIONS,
 	MIN_OPTIONS,
+	type QuestionAnswer,
 	type QuestionData,
 	type QuestionnaireError,
 	type QuestionnaireResult,
@@ -391,12 +397,13 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 					// Telegram stayed silent past its (independent, longer) timeout — recover
 					// to the main conversation's local ask instead of treating silence as a decline.
 					if (outcome.kind === "timed_out") {
-						const recovered = await recoverFromRemoteTimeout(
+						const recovered = await resumeRemainingLocally(
 							pi,
 							ctx,
 							typed.questions.map((q, i) => ({ question: q, index: i })),
-							outcome,
+							outcome.partialAnswers,
 							remoteCfg,
+							TIMEOUT_RECOVERY_NOTICE,
 						);
 						return localOutcomeEnvelope(recovered, typed);
 					}
@@ -424,15 +431,29 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 						remoteCfg,
 					);
 					if (outcome.kind === "answered") return buildQuestionnaireResponse(outcome.result, typed);
-					// Feishu stayed silent past the per-question timeout — recover to the
-					// main conversation's local ask instead of treating silence as a decline.
-					if (outcome.kind === "timed_out") {
-						const recovered = await recoverFromRemoteTimeout(
+					// 「回到 TUI」: the user chose to answer in the terminal — re-ask the
+					// still-unanswered questions here, keeping the Feishu answers.
+					if (outcome.kind === "handoff") {
+						const resumed = await resumeRemainingLocally(
 							pi,
 							ctx,
 							typed.questions.map((q, i) => ({ question: q, index: i })),
-							outcome,
+							outcome.partialAnswers,
 							remoteCfg,
+							TUI_HANDOFF_NOTICE,
+						);
+						return localOutcomeEnvelope(resumed, typed);
+					}
+					// Feishu stayed silent past the per-question timeout — recover to the
+					// main conversation's local ask instead of treating silence as a decline.
+					if (outcome.kind === "timed_out") {
+						const recovered = await resumeRemainingLocally(
+							pi,
+							ctx,
+							typed.questions.map((q, i) => ({ question: q, index: i })),
+							outcome.partialAnswers,
+							remoteCfg,
+							TIMEOUT_RECOVERY_NOTICE,
 						);
 						return localOutcomeEnvelope(recovered, typed);
 					}
@@ -591,7 +612,7 @@ async function runRemoteQuestionnaireWithConnect(
 	cfg: RemoteConfig,
 ): Promise<RemoteOutcome> {
 	try {
-		const transport = await createFeishuTransport(cfg.feishu, { events });
+		const transport = await createFeishuTransport(cfg.feishu, { events, debug: loadConfig().debug === true });
 		try {
 			return await runRemoteQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
 		} finally {
@@ -618,9 +639,9 @@ async function runTgQuestionnaireWithConnect(
 	ctx: { ui: { notify?: (msg: string, level: "info" | "error") => void } },
 	questions: RemoteQuestion[],
 	cfg: RemoteConfig,
-): Promise<RemoteOutcome> {
+): Promise<TgOutcome> {
 	try {
-		const transport = createTgTransport(cfg.tg, { events });
+		const transport = createTgTransport(cfg.tg, { events, debug: loadConfig().debug === true });
 		try {
 			return await runTgQuestionnaire(transport, questions, cfg, (msg, level) => ctx.ui.notify?.(msg, level));
 		} finally {
@@ -847,9 +868,36 @@ async function runLocalQuestionnaire(
 						},
 					};
 				}
+				// 「回到 TUI」: the user asked to finish in the terminal — the remaining
+				// questions are re-asked by the local dialog right below.
+				if (outcome.kind === "handoff") {
+					const resumed = await resumeRemainingLocally(
+						pi,
+						ctx,
+						remaining,
+						outcome.partialAnswers,
+						remoteCfg,
+						TUI_HANDOFF_NOTICE,
+					);
+					if (resumed.kind === "failed") return resumed;
+					return {
+						kind: "answered",
+						result: {
+							answers: [...result.answers, ...resumed.result.answers],
+							cancelled: resumed.result.cancelled,
+						},
+					};
+				}
 				// Feishu also stayed silent — recover to the main conversation.
 				if (outcome.kind === "timed_out") {
-					const recovered = await recoverFromRemoteTimeout(pi, ctx, remaining, outcome, remoteCfg);
+					const recovered = await resumeRemainingLocally(
+						pi,
+						ctx,
+						remaining,
+						outcome.partialAnswers,
+						remoteCfg,
+						TIMEOUT_RECOVERY_NOTICE,
+					);
 					if (recovered.kind === "failed") return recovered;
 					return {
 						kind: "answered",
@@ -875,28 +923,44 @@ async function runLocalQuestionnaire(
 	}
 }
 
+/** TUI notice before the local re-ask after a Feishu wait timed out. */
+const TIMEOUT_RECOVERY_NOTICE = {
+	key: "remote.timeout_recover",
+	fallback: "No reply from Feishu — asking in the main conversation instead",
+} as const;
+
+/** TUI notice before the local re-ask after the user asked to answer in the TUI. */
+const TUI_HANDOFF_NOTICE = {
+	key: "remote.tui_handoff",
+	fallback: "Continuing in the terminal — asking the remaining questions here",
+} as const;
+
 /**
- * Feishu wait timed out with no reply: re-ask the still-unanswered questions
- * in the main conversation (local TUI / RPC ask). Answers keep their ORIGINAL
- * `questionIndex` — local answers are remapped through `questions` so the
+ * Re-ask the still-unanswered questions in the main conversation (local TUI /
+ * RPC ask). Used by two Feishu outcomes: a wait that timed out, and the
+ * 「回到 TUI」 handoff (the user chose to answer in the terminal — the Feishu
+ * cards are locked by the transport already). Answers keep their ORIGINAL
+ * `questionIndex`: local answers are remapped through `questions` so the
  * merged envelope stays aligned with the caller's original `typed.questions`.
+ * `notice` is the locale key + English fallback of the TUI notification shown
+ * before the local ask.
  */
-async function recoverFromRemoteTimeout(
+async function resumeRemainingLocally(
 	pi: ExtensionAPI,
 	ctx: LocalQuestionnaireCtx,
 	questions: RemoteQuestion[],
-	outcome: Extract<RemoteOutcome, { kind: "timed_out" }>,
+	partialAnswers: QuestionAnswer[],
 	remoteCfg: RemoteConfig,
+	notice: { key: string; fallback: string },
 ): Promise<LocalQuestionnaireOutcome> {
-	const answered = new Set(outcome.partialAnswers.map((a) => a.questionIndex));
+	const answered = new Set(partialAnswers.map((a) => a.questionIndex));
 	const remaining = questions.filter(({ index }) => !answered.has(index));
 	if (remaining.length === 0) {
-		return { kind: "answered", result: { answers: outcome.partialAnswers, cancelled: false } };
+		return { kind: "answered", result: { answers: partialAnswers, cancelled: false } };
 	}
-	ctx.ui.notify?.(
-		t("remote.timeout_recover", "No reply from Feishu — asking in the main conversation instead"),
-		"info",
-	);
+	ctx.ui.notify?.(t(notice.key, notice.fallback), "info");
+	// enableLocalTimeout stays off: a second silence ends in the local ask instead
+	// of bouncing back to Feishu.
 	const local = await runLocalQuestionnaire(pi, ctx, { questions: remaining.map((r) => r.question) }, remoteCfg, {
 		enableLocalTimeout: false,
 	});
@@ -907,7 +971,7 @@ async function recoverFromRemoteTimeout(
 	}));
 	return {
 		kind: "answered",
-		result: { answers: [...outcome.partialAnswers, ...remapped], cancelled: local.result.cancelled },
+		result: { answers: [...partialAnswers, ...remapped], cancelled: local.result.cancelled },
 	};
 }
 

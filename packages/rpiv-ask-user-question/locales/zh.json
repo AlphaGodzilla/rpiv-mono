@@ -38,5 +38,7 @@
   "remote.please_text": "请回复文本（表情/图片无法作为回答）",
   "remote.fallback_notify": "本地等待超时，剩余问题已发送到飞书",
   "remote.timeout_recover": "飞书超时无回复，改在主对话中重新提问",
-  "remote.tg_sent": "问题已发送到 Telegram，请被 @ 的用户在群里回复"
+  "remote.tg_sent": "问题已发送到 Telegram，请被 @ 的用户在群里回复",
+  "remote.msg.tui_hint": "回复 \"tui\" 回到本地界面继续作答。",
+  "remote.tui_handoff": "已切回本地界面，剩余问题继续在主对话中提问"
 }

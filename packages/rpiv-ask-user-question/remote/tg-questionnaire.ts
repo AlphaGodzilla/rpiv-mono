@@ -3,7 +3,7 @@ import type { QuestionAnswer } from "../tool/types.js";
 import { classifyRemoteError, type TgTransport } from "./channel-transport.js";
 import { parseReply } from "./message-format.js";
 import type { RemoteConfig } from "./remote-config.js";
-import type { RemoteOutcome, RemoteQuestion } from "./remote-questionnaire.js";
+import type { RemoteQuestion, TgOutcome } from "./remote-questionnaire.js";
 import { buildTgKeyboard, buildTgQuestionMessage } from "./tg-message.js";
 
 /**
@@ -27,7 +27,7 @@ export async function runTgQuestionnaire(
 	questions: readonly RemoteQuestion[],
 	cfg: RemoteConfig,
 	onNotify: (message: string, level: "info" | "error") => void,
-): Promise<RemoteOutcome> {
+): Promise<TgOutcome> {
 	const answers: QuestionAnswer[] = [];
 
 	for (const { question, index } of questions) {

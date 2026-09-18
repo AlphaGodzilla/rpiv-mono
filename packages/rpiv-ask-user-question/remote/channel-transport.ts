@@ -1,5 +1,9 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_NAME } from "../config.js";
 import type { QuestionData } from "../tool/types.js";
-import { buildQuestionCard, type CardButtonValue, isCancelWord } from "./message-format.js";
+import { buildQuestionCard, type CardButtonValue, isCancelWord, isTuiHandoffWord } from "./message-format.js";
 import type { FeishuReceiver, FeishuRemoteConfig, TgRemoteConfig } from "./remote-config.js";
 import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type TgButtonValue } from "./tg-message.js";
 
@@ -24,11 +28,57 @@ import { buildTgAnswerNote, buildTgDoneKeyboard, buildTgQuestionMessage, type Tg
  * "send failed" envelope), while `waitForReply` resolves `null` on timeout.
  */
 
+/**
+ * 诊断日志（debug.log）：**默认关闭**，由配置顶层 `debug: true` 打开（每次问卷开始时读取）。
+ *
+ * 为什么要有它：卡片交互的问题多发生在「不可见的那几秒」——发送耗时、入站事件是否到达、
+ * 被哪条过滤规则丢弃、等待何时开始/结束。开着它才能把「点卡片 → 生效」的时间轴摊开，
+ * 并与 pi-channel 的 debug.log 对齐时间轴；默认关闭时一行不写、也不产生文件（TUI 同样零输出）。
+ */
+let debugEnabled = false;
+
+/** 开关来源：transport 构造时的 `deps.debug`（由 ask-user-question 从配置读取后传入）。 */
+function setTransportDebug(enabled: boolean): void {
+	debugEnabled = enabled;
+}
+
+export function transportDebugLogPath(): string {
+	return join(getAgentDir(), "extensions", CONFIG_NAME, "debug.log");
+}
+
+function logDebug(line: string): void {
+	if (!debugEnabled) return;
+	// vitest 下不写盘：测试不该碰真实用户目录。
+	if (process.env.VITEST !== undefined) return;
+	try {
+		const file = transportDebugLogPath();
+		mkdirSync(dirname(file), { recursive: true });
+		appendFileSync(file, `[${new Date().toISOString()}] ${line.slice(0, 400)}\n`, "utf8");
+	} catch {
+		// 诊断日志失败绝不影响主流程
+	}
+}
+
 export const CHANNEL_SEND = "ag-pi-channel:send";
 export const CHANNEL_SEND_RESULT = "ag-pi-channel:send:result";
 export const CHANNEL_INBOUND = "ag-pi-channel:inbound";
 export const CHANNEL_STATUS = "ag-pi-channel:status";
 export const CHANNEL_STATUS_RESULT = "ag-pi-channel:status:result";
+/**
+ * 入站就绪请求（镜像 pi-channel 的 `ag-pi-channel:connect`）：插件是惰性连接的（首次发送成功后才
+ * 建长连接），于是「卡片已到飞书、长连接还没握完手」的窗口里用户点击平台无处投递 → 丢击 + 客户端
+ * 3s 超时重试（观感就是「点好几次才生效」）。首发送前先请求就绪，等价于拆分前 connect-then-send 的时序。
+ */
+export const CHANNEL_CONNECT = "ag-pi-channel:connect";
+export const CHANNEL_CONNECT_RESULT = "ag-pi-channel:connect:result";
+/**
+ * 入站释放请求（镜像 pi-channel 的 `ag-pi-channel:release`）：connect 的反向操作。
+ * 必须成对 —— 飞书对同一 app 的多条长连接是选一条投递，而插件是全局扩展（每个 pi 进程都加载）：
+ * 只 connect 不 release 的进程会长期占着连接，把按钮点击从「正在等回复」的进程那里抢走（点击被别的
+ * 实例 ack 成 toast，却永远没人处理）。问卷结束（transport close）时释放，双方计数归零即断开连接。
+ */
+export const CHANNEL_RELEASE = "ag-pi-channel:release";
+export const CHANNEL_RELEASE_RESULT = "ag-pi-channel:release:result";
 
 export type ChannelProvider = "feishu" | "telegram";
 
@@ -157,6 +207,39 @@ export type ChannelStatusResult = {
 	providers: ChannelProviderStatus[];
 };
 
+export type ChannelConnectRequest = {
+	requestId: string;
+	provider: ChannelProvider;
+};
+
+export type ChannelConnectResult = {
+	requestId: string;
+	ok: boolean;
+	/** 入站通道是否已就绪（`ok: false` 时为 false） */
+	connected: boolean;
+	error?: { code: string; message: string };
+};
+
+export type ChannelReleaseRequest = {
+	requestId: string;
+	provider: ChannelProvider;
+};
+
+export type ChannelReleaseResult = {
+	requestId: string;
+	ok: boolean;
+	/** 释放后该 provider 的实际连接状态（仍有别的持有者时为 true） */
+	connected: boolean;
+	error?: { code: string; message: string };
+};
+
+/** 入站就绪等待上限：实测飞书冷启动握手 ~2.5s，留足余量。 */
+/**
+ * 入站就绪等待上限（默认 5s）：实测飞书冷启动握手 ~2.5s，留 2× 余量；
+ * 超时（老版本插件不响应该请求）按旧行为继续发送，不让首发送白等更久。
+ */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+
 /** 消费方需要的最小事件总线形状（与 pi 的 EventBus 结构一致）。 */
 export type EventsLike = {
 	emit(channel: string, data: unknown): void;
@@ -239,6 +322,68 @@ export async function statusViaBus(
 }
 
 /** 插件上报 `ok: false`（或请求超时）时抛出；`classifyRemoteError` 能读出 `code`。 */
+/**
+ * 请求插件把该 provider 的入站通道建好（幂等），超时返回 `null`。
+ * 与 `sendViaBus` / `statusViaBus` 同源同语义（requestId 关联 + 绝不抛异常）。
+ * `null` = 插件没加载，或插件版本还没有 connect 契约 —— 调用方应照常继续（退化为惰性行为）。
+ */
+export async function connectViaBus(
+	events: EventsLike,
+	provider: ChannelProvider,
+	timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+): Promise<ChannelConnectResult | null> {
+	const requestId = globalThis.crypto.randomUUID();
+	return await new Promise<ChannelConnectResult | null>((resolve) => {
+		let settled = false;
+		const finish = (result: ChannelConnectResult | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			unsubscribe();
+			resolve(result);
+		};
+		const timer = setTimeout(() => finish(null), timeoutMs);
+		timer.unref?.();
+		const unsubscribe = events.on(CHANNEL_CONNECT_RESULT, (data) => {
+			const result = data as ChannelConnectResult | undefined;
+			if (!result || result.requestId !== requestId) return;
+			finish(result);
+		});
+		events.emit(CHANNEL_CONNECT, { requestId, provider } satisfies ChannelConnectRequest);
+	});
+}
+
+/**
+ * `connectViaBus` 的反向操作：告诉插件「这个 provider 的入站我用完了」。
+ * 同源同语义（requestId 关联 + 绝不抛异常，超时返回 `null`）；调用方通常 fire-and-forget。
+ */
+export async function releaseViaBus(
+	events: EventsLike,
+	provider: ChannelProvider,
+	timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+): Promise<ChannelReleaseResult | null> {
+	const requestId = globalThis.crypto.randomUUID();
+	return await new Promise<ChannelReleaseResult | null>((resolve) => {
+		let settled = false;
+		const finish = (result: ChannelReleaseResult | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			unsubscribe();
+			resolve(result);
+		};
+		const timer = setTimeout(() => finish(null), timeoutMs);
+		timer.unref?.();
+		const unsubscribe = events.on(CHANNEL_RELEASE_RESULT, (data) => {
+			const result = data as ChannelReleaseResult | undefined;
+			if (!result || result.requestId !== requestId) return;
+			finish(result);
+		});
+		events.emit(CHANNEL_RELEASE, { requestId, provider } satisfies ChannelReleaseRequest);
+	});
+}
+
+/** 插件上报 `ok: false`（或请求超时）时抛出；`classifyRemoteError` 能读出 `code`。 */
 export class ChannelSendError extends Error {
 	readonly code: string;
 	constructor(code: string, message: string) {
@@ -261,6 +406,11 @@ export interface RemoteReply {
 	chatType: "p2p" | "group";
 	senderId: string;
 	messageId: string;
+	/**
+	 * The user asked to keep answering in the terminal instead (the 「回到 TUI」
+	 * button or the reserved `tui` reply): nothing was answered, `text` is empty.
+	 */
+	tuiHandoff?: boolean;
 }
 
 /**
@@ -275,12 +425,18 @@ export interface CardReplyContext {
 	index: number;
 	/** First configured cancel word — button-cancel replies are routed through it. */
 	cancelWord: string;
+	/**
+	 * Message ids of the cards sent for this question (one per receiver). A
+	 * text-reply handoff locks all of them — the card the user did not click
+	 * would otherwise stay clickable.
+	 */
+	cardMessageIds?: readonly string[];
 }
 
 export interface RemoteTransport {
 	send(receiver: FeishuReceiver, text: string): Promise<void>;
-	/** Send an interactive card (V2 schema). */
-	sendCard(receiver: FeishuReceiver, card: object): Promise<void>;
+	/** Send an interactive card (V2 schema); resolves with its message id when known. */
+	sendCard(receiver: FeishuReceiver, card: object): Promise<string | undefined>;
 	/** Replace an already-sent card's content (used to lock answered cards). */
 	updateCard(messageId: string, card: object): Promise<void>;
 	/**
@@ -326,13 +482,17 @@ export interface TgTransport {
 	close(): Promise<void>;
 }
 
-/** How the transports reach the pi-channel plugin; both timeouts are test seams. */
+/** How the transports reach the pi-channel plugin; the timeouts are test seams. */
 export interface ChannelTransportDeps {
 	events: EventsLike;
 	/** Outbound send timeout (default 10s — the plugin's own request budget). */
 	sendTimeoutMs?: number;
 	/** One-shot plugin readiness probe timeout (default 1.5s). */
 	probeTimeoutMs?: number;
+	/** Inbound-readiness wait before the first send (default 10s — the measured cold handshake is ~2.5s). */
+	connectTimeoutMs?: number;
+	/** 诊断日志开关（配置顶层 `debug`）：开则写 debug.log，默认关。 */
+	debug?: boolean;
 }
 
 abstract class ChannelTransportBase<Reply> {
@@ -340,17 +500,24 @@ abstract class ChannelTransportBase<Reply> {
 	protected readonly events: EventsLike;
 	protected readonly sendTimeoutMs: number;
 	protected readonly probeTimeoutMs: number;
+	protected readonly connectTimeoutMs: number;
 
 	private active = true;
 	private unsubscribe: (() => void) | undefined;
 	private cancelPending: (() => void) | undefined;
 	/** 记忆化的一次性就绪探测；一旦失败，之后每次发送都直接沿用该拒绝。 */
 	private readinessProbe: Promise<void> | undefined;
+	/** 记忆化的一次性入站就绪请求（见 `ensureInboundChannel`）。 */
+	private inboundProbe: Promise<void> | undefined;
+	/** 本次 transport 是否成功持有过入站（`close()` 要按同一语义释放，保证与插件的计数配对）。 */
+	private inboundAcquired = false;
 
 	constructor(deps: ChannelTransportDeps) {
 		this.events = deps.events;
 		this.sendTimeoutMs = deps.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
 		this.probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
+		this.connectTimeoutMs = deps.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+		setTransportDebug(deps.debug === true);
 	}
 
 	/**
@@ -379,16 +546,47 @@ abstract class ChannelTransportBase<Reply> {
 		return this.readinessProbe;
 	}
 
+	/**
+	 * 首次发送前确保插件的入站通道就绪。为什么：插件是惰性连接的 —— 它要等第一次发送成功后才去建
+	 * 长连接，于是最先发出的那张卡片会在「平台还没法投递点击」的状态下等约 2.5s，窗口内的点击直接
+	 * 丢失（客户端 3s 超时后重试，用户观感是「点了好几次才生效」）。先请求就绪再发首条，即拆分前
+	 * connect-then-send 的时序。
+	 *
+	 * 已连接时零额外开销；插件不支持该请求（老版本 / 未加载）时不阻塞发送 —— 发送自己会给出准确的
+	 * 错误码，这里只负责把窗口消掉。
+	 */
+	private ensureInboundChannel(): Promise<void> {
+		this.inboundProbe ??= (async () => {
+			await this.ensurePluginReady();
+			// 即使 status 显示已连接也照发 connect：持有是**计数**语义，必须与 close() 的 release 严格配对。
+			// 「已连接就跳过」会留下竞态：上一份问卷的 release 在下一份问卷进行中把连接关掉。
+			const result = await connectViaBus(this.events, this.provider, this.connectTimeoutMs);
+			if (result?.ok) this.inboundAcquired = true;
+		})().catch(() => undefined);
+		return this.inboundProbe;
+	}
+
 	/** Emit one send request and reject when the plugin reports a failure or the request times out. */
 	protected async sendRequest(request: ChannelSendInput): Promise<string | undefined> {
-		await this.ensurePluginReady();
-		const result = await sendViaBus(this.events, request, this.sendTimeoutMs);
-		if (!result.ok) {
-			const code = result.error?.code ?? "unknown";
-			const message = result.error?.message ?? `channel ${request.provider} ${request.kind} request failed`;
-			throw new ChannelSendError(code, message);
+		const startedAt = Date.now();
+		const kind = "update" in request && request.update ? `${request.kind}(update)` : request.kind;
+		logDebug(`[send] start provider=${request.provider} kind=${kind}`);
+		try {
+			await this.ensureInboundChannel();
+			await this.ensurePluginReady();
+			const result = await sendViaBus(this.events, request, this.sendTimeoutMs);
+			if (!result.ok) {
+				const code = result.error?.code ?? "unknown";
+				const message = result.error?.message ?? `channel ${request.provider} ${request.kind} request failed`;
+				throw new ChannelSendError(code, message);
+			}
+			logDebug(`[send] ok in ${Date.now() - startedAt}ms msg=${result.messageId ?? "-"}`);
+			return result.messageId;
+		} catch (err) {
+			const { code } = classifyRemoteError(err);
+			logDebug(`[send] FAIL in ${Date.now() - startedAt}ms code=${code}`);
+			throw err;
 		}
-		return result.messageId;
 	}
 
 	/**
@@ -400,6 +598,8 @@ abstract class ChannelTransportBase<Reply> {
 		handle: (evt: ChannelInboundEvent, finish: (reply: Reply | null) => void) => void,
 	): Promise<Reply | null> {
 		return new Promise<Reply | null>((resolve) => {
+			const startedAt = Date.now();
+			logDebug(`[wait] start provider=${this.provider} timeout=${timeoutMs}ms`);
 			let settled = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const finish = (reply: Reply | null) => {
@@ -409,6 +609,9 @@ abstract class ChannelTransportBase<Reply> {
 				this.unsubscribe?.();
 				this.unsubscribe = undefined;
 				this.cancelPending = undefined;
+				logDebug(
+					`[wait] resolve in ${Date.now() - startedAt}ms ${reply === null ? "timeout/closed" : JSON.stringify(reply).slice(0, 200)}`,
+				);
 				resolve(reply);
 			};
 
@@ -433,6 +636,18 @@ abstract class ChannelTransportBase<Reply> {
 		this.cancelPending?.();
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
+		this.releaseInbound();
+	}
+
+	/**
+	 * 用完入站：通知插件清掉本次持有（`ag-pi-channel:release`，与首次发送前的 connect 配对）。
+	 * fire-and-forget —— 结束流程不该被总线往返拖住；插件侧计数归零才会真正断开连接，
+	 * 于是问卷结束后本进程不再占着飞书长连接（正是「多个 pi 进程抢回调」的根治点）。
+	 */
+	private releaseInbound(): void {
+		if (!this.inboundAcquired) return;
+		this.inboundAcquired = false;
+		void releaseViaBus(this.events, this.provider, this.connectTimeoutMs).catch(() => undefined);
 	}
 }
 
@@ -454,8 +669,8 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 		});
 	}
 
-	async sendCard(receiver: FeishuReceiver, card: object): Promise<void> {
-		await this.sendRequest({
+	async sendCard(receiver: FeishuReceiver, card: object): Promise<string | undefined> {
+		return await this.sendRequest({
 			provider: "feishu",
 			kind: "card",
 			to: { id: receiver.value, type: receiver.type },
@@ -469,11 +684,19 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 
 	waitForReply(timeoutMs: number, onNonText?: () => void, card?: CardReplyContext): Promise<RemoteReply | null> {
 		return this.waitForInbound(timeoutMs, (evt, finish) => {
+			logDebug(
+				`[evt] provider=${evt.provider} kind=${evt.kind} chat=${evt.chatId} msg=${evt.messageId} ${
+					evt.kind === "message"
+						? `type=${evt.contentType} text=${JSON.stringify(evt.text).slice(0, 80)}`
+						: `value=${JSON.stringify(evt.value).slice(0, 120)}`
+				}`,
+			);
 			if (evt.provider !== "feishu") return;
 
 			if (evt.kind === "message") {
 				// Non-text messages (sticker, image, file, …) never answer a question.
 				if (evt.contentType !== "text" || evt.text.trim().length === 0) {
+					logDebug("[drop] non-text");
 					onNonText?.();
 					return;
 				}
@@ -481,7 +704,20 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 				// are the configured receivers). group: the chat must be one of the
 				// configured chat_id receivers; the plugin's requireMention policy
 				// already guarantees the bot was @'d.
-				if (evt.chatType !== "p2p" && !this.groupChatIds.has(evt.chatId)) return;
+				if (evt.chatType !== "p2p" && !this.groupChatIds.has(evt.chatId)) {
+					logDebug(`[drop] chat-filter(message) chat=${evt.chatId}`);
+					return;
+				}
+				// The reserved 「回到 TUI」 reply: the user wants to keep answering in
+				// the terminal — lock the question's cards (when cards were sent) and
+				// hand the flow back. Works in text mode too, which advertises it.
+				if (isTuiHandoffWord(evt.text)) {
+					logDebug("[act] tui-handoff(keyword)");
+					if (card) this.lockCards(card, true);
+					finish(this.handoffReply(evt));
+					return;
+				}
+				logDebug("[act] answer(text)");
 				finish({
 					text: evt.text,
 					chatId: evt.chatId,
@@ -497,11 +733,32 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 			// (personal scenario); otherwise only clicks from the configured group
 			// chats. The question-index check (`value.q`) drops clicks on stale
 			// cards from earlier questions.
-			if (!card) return;
-			if (this.groupChatIds.size > 0 && !this.groupChatIds.has(evt.chatId)) return;
+			if (!card) {
+				logDebug("[drop] no-card-ctx");
+				return;
+			}
+			if (this.groupChatIds.size > 0 && !this.groupChatIds.has(evt.chatId)) {
+				logDebug(`[drop] chat-filter(action) chat=${evt.chatId}`);
+				return;
+			}
 			const value = evt.value as CardButtonValue | undefined;
-			if (!value || typeof value !== "object") return;
-			if (String(card.index) !== String(value.q)) return;
+			if (!value || typeof value !== "object") {
+				logDebug("[drop] bad-value");
+				return;
+			}
+			if (String(card.index) !== String(value.q)) {
+				logDebug(`[drop] stale-q wait=${card.index} card=${value.q}`);
+				return;
+			}
+
+			// 「回到 TUI」: nothing is answered — lock every card sent for this
+			// question and let the caller continue in the terminal.
+			if (value.t === "1") {
+				logDebug("[act] tui-handoff(button)");
+				this.lockCards(card, true, evt.messageId);
+				finish(this.handoffReply(evt));
+				return;
+			}
 
 			const isCancel = value.c === "1";
 			const optionNum = typeof value.o === "string" ? Number.parseInt(value.o, 10) : NaN;
@@ -510,6 +767,7 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 			// Lock the card via the update API: ✓ on the chosen button, everything
 			// else disabled. The 3s callback ack (toast) is handled by the plugin
 			// from the button value's `ackText`.
+			logDebug(`[act] answer(button) o=${value.o ?? "-"} c=${value.c ?? "-"}`);
 			void this.updateCard(evt.messageId, updatedCard).catch(() => undefined);
 
 			finish({
@@ -520,6 +778,31 @@ class FeishuBusTransport extends ChannelTransportBase<RemoteReply> implements Re
 				messageId: evt.messageId,
 			});
 		});
+	}
+
+	/** Reply shape for the 「回到 TUI」 handoff: nothing was answered, so `text` is empty. */
+	private handoffReply(evt: ChannelInboundMessage | ChannelInboundAction): RemoteReply {
+		return {
+			text: "",
+			chatId: evt.chatId,
+			chatType: this.chatTypeOf(evt),
+			senderId: evt.senderId,
+			messageId: evt.messageId,
+			tuiHandoff: true,
+		};
+	}
+
+	/**
+	 * Lock the card(s) sent for the pending question and, when `handedOff` is
+	 * true, mark them as moved to the terminal. Tracked ids come first (every
+	 * receiver's card must stop accepting answers); a click without tracked ids
+	 * still locks its own card via `fallbackMessageId` — a text reply has no
+	 * card to point at.
+	 */
+	private lockCards(card: CardReplyContext, handedOff: boolean, fallbackMessageId?: string): void {
+		const ids = card.cardMessageIds?.length ? card.cardMessageIds : fallbackMessageId ? [fallbackMessageId] : [];
+		const updated = buildQuestionCard(card.question, card.index, undefined, false, handedOff);
+		for (const id of ids) void this.updateCard(id, updated).catch(() => undefined);
 	}
 
 	/** Feishu p2p/group label; action events may lack `chatType`, so fall back to the receiver set. */

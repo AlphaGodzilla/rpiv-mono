@@ -39,7 +39,7 @@ function reply(text: string, over: Partial<RemoteReply> = {}): RemoteReply {
 function makeTransport(over: Partial<RemoteTransport> = {}): RemoteTransport {
 	return {
 		send: vi.fn(async () => undefined),
-		sendCard: vi.fn(async () => undefined),
+		sendCard: vi.fn(async () => "om_card"),
 		updateCard: vi.fn(async () => undefined),
 		waitForReply: vi.fn(async () => reply("1")),
 		close: vi.fn(async () => undefined),
@@ -182,10 +182,35 @@ describe("runRemoteQuestionnaire — card mode", () => {
 		expect(transport.send).toHaveBeenCalledTimes(2);
 	});
 
-	it("passes the card reply context (question, index, cancelWord) into waitForReply", async () => {
+	it("passes the card reply context (question, index, cancelWord, card message ids) into waitForReply", async () => {
 		const transport = makeTransport();
 		await runRemoteQuestionnaire(transport, questions, makeCfg(), vi.fn());
 		const ctx = vi.mocked(transport.waitForReply).mock.calls[0][2];
-		expect(ctx).toEqual({ question: questions[0].question, index: 0, cancelWord: "取消" });
+		expect(ctx).toEqual({
+			question: questions[0].question,
+			index: 0,
+			cancelWord: "取消",
+			cardMessageIds: ["om_card", "om_card"],
+		});
+	});
+
+	it("reports a handoff with the answers collected so far when the user asks for the TUI", async () => {
+		const transport = makeTransport();
+		vi.mocked(transport.waitForReply)
+			.mockResolvedValueOnce(reply("1"))
+			.mockResolvedValueOnce(reply("", { tuiHandoff: true }));
+
+		const outcome = await runRemoteQuestionnaire(transport, questions, makeCfg(), vi.fn());
+
+		expect(outcome.kind).toBe("handoff");
+		if (outcome.kind !== "handoff") return;
+		expect(outcome.partialAnswers).toEqual([{ questionIndex: 0, question: "Q1", kind: "option", answer: "A" }]);
+	});
+
+	it("advertises the back-to-TUI reply in the plain-text message", async () => {
+		const transport = makeTransport();
+		await runRemoteQuestionnaire(transport, [questions[0]], makeCfg({}, false), vi.fn());
+		const text = vi.mocked(transport.send).mock.calls[0][1];
+		expect(text).toContain("tui");
 	});
 });

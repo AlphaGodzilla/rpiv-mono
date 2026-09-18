@@ -4,6 +4,7 @@ import {
 	buildQuestionCard,
 	buildQuestionMessage,
 	isCancelWord,
+	isTuiHandoffWord,
 	MAX_REMOTE_PREVIEW_CHARS,
 	parseReply,
 } from "./message-format.js";
@@ -36,6 +37,12 @@ describe("buildQuestionMessage", () => {
 		const msg = buildQuestionMessage(makeQuestion({ multiSelect: true }));
 		expect(msg).toContain('comma-separated (e.g. "1,3")');
 		expect(msg).not.toContain("Reply with the option number");
+	});
+
+	it("appends extra hints after the standard one and skips blanks", () => {
+		const msg = buildQuestionMessage(makeQuestion(), ['Reply "tui" to finish in the terminal.']);
+		expect(msg.trimEnd().endsWith('Reply "tui" to finish in the terminal.')).toBe(true);
+		expect(buildQuestionMessage(makeQuestion(), [""])).toBe(buildQuestionMessage(makeQuestion()));
 	});
 
 	it("omits the header bracket when header is empty", () => {
@@ -218,13 +225,30 @@ describe("parseReply — cancel", () => {
 	});
 });
 
+describe("isTuiHandoffWord", () => {
+	it("matches the reserved replies that hand the questionnaire back to the TUI", () => {
+		expect(isTuiHandoffWord("tui")).toBe(true);
+		expect(isTuiHandoffWord("TUI")).toBe(true);
+		expect(isTuiHandoffWord("  tui  ")).toBe(true);
+		expect(isTuiHandoffWord("本地")).toBe(true);
+	});
+
+	it("leaves answers and cancel words untouched", () => {
+		expect(isTuiHandoffWord("tuix")).toBe(false);
+		expect(isTuiHandoffWord("1")).toBe(false);
+		expect(isTuiHandoffWord("取消")).toBe(false);
+		expect(isTuiHandoffWord("")).toBe(false);
+	});
+});
+
 describe("buildQuestionCard", () => {
-	it("builds a V2 card with one button per option plus a cancel button", () => {
+	it("builds a V2 card with one button per option plus 「回到 TUI」 and Cancel", () => {
 		const card = buildQuestionCard(makeQuestion(), 0) as {
 			schema: string;
 			body: {
 				elements: {
 					tag: string;
+					content?: string;
 					columns?: { elements: { tag: string; text: { content: string }; behaviors?: { value: unknown }[] }[] }[];
 				}[];
 			};
@@ -233,10 +257,13 @@ describe("buildQuestionCard", () => {
 		const buttons = card.body.elements
 			.filter((e) => e.tag === "column_set")
 			.flatMap((e) => e.columns?.map((c) => c.elements[0]) ?? []);
-		expect(buttons.map((b) => b.text.content)).toEqual(["A", "B", "取消"]);
+		expect(buttons.map((b) => b.text.content)).toEqual(["A", "B", "回到 TUI", "取消"]);
 		const values = buttons.map((b) => b.behaviors?.[0]?.value);
 		expect(values[0]).toEqual({ q: "0", o: "1", ackText: "已选择" });
-		expect(values[2]).toEqual({ q: "0", c: "1", ackText: "已取消" });
+		expect(values[2]).toEqual({ q: "0", t: "1", ackText: "已切回 TUI" });
+		expect(values[3]).toEqual({ q: "0", c: "1", ackText: "已取消" });
+		const markdown = card.body.elements.find((e) => e.tag === "markdown") as { content: string };
+		expect(markdown.content).toContain("回复 tui");
 	});
 
 	it("marks the chosen button with a checkmark and disables every other button when answered", () => {
@@ -255,8 +282,10 @@ describe("buildQuestionCard", () => {
 		expect(buttons[0].disabled).toBe(true);
 		expect(buttons[1].text.content).toBe("✓ B");
 		expect(buttons[1].disabled).toBeUndefined();
-		expect(buttons[2].text.content).toBe("取消");
+		expect(buttons[2].text.content).toBe("回到 TUI");
 		expect(buttons[2].disabled).toBe(true);
+		expect(buttons[3].text.content).toBe("取消");
+		expect(buttons[3].disabled).toBe(true);
 	});
 
 	it("disables all buttons and appends a cancelled notice when cancelled", () => {
@@ -278,14 +307,34 @@ describe("buildQuestionCard", () => {
 		expect(markdown.content).toContain("已取消");
 	});
 
-	it("multi-select cards carry only a cancel button", () => {
+	it("multi-select cards carry the 「回到 TUI」 and Cancel buttons", () => {
 		const card = buildQuestionCard(makeQuestion({ multiSelect: true }), 2) as {
-			body: { elements: { tag: string; columns?: { elements: { tag: string }[] }[] }[] };
+			body: { elements: { tag: string; columns?: { elements: { tag: string; text: { content: string } }[] }[] }[] };
 		};
 		const buttons = card.body.elements
 			.filter((e) => e.tag === "column_set")
 			.flatMap((e) => e.columns?.map((c) => c.elements[0]) ?? []);
-		expect(buttons).toHaveLength(1);
-		expect(buttons[0].tag).toBe("button");
+		expect(buttons.map((b) => b.text.content)).toEqual(["回到 TUI", "取消"]);
+		expect(buttons.every((b) => b.tag === "button")).toBe(true);
+	});
+
+	it("locks every button and points at the terminal when handed off", () => {
+		const card = buildQuestionCard(makeQuestion(), 0, undefined, false, true) as {
+			body: {
+				elements: {
+					tag: string;
+					content?: string;
+					columns?: { elements: { text: { content: string }; disabled?: boolean }[] }[];
+				}[];
+			};
+		};
+		const buttons = card.body.elements
+			.filter((e) => e.tag === "column_set")
+			.flatMap((e) => e.columns?.map((c) => c.elements[0]) ?? []);
+		expect(buttons.map((b) => b.text.content)).toEqual(["A", "B", "已切回 TUI", "取消"]);
+		expect(buttons.every((b) => b.disabled === true)).toBe(true);
+		const markdown = card.body.elements.find((e) => e.tag === "markdown") as { content: string };
+		expect(markdown.content).toContain("已切回 TUI 作答");
+		expect(markdown.content).not.toContain("回复 tui");
 	});
 });
