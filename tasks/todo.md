@@ -1,7 +1,7 @@
 # Task List: ask-prd — tgbot 远程问答模式
 
 > 依赖 `tasks/plan.md`。任务按依赖顺序编号，每个任务满足 Acceptance criteria + Verification 才算完成。
-> 聚焦测试命令：`cd ~/.pi/agent/rpiv-mono && npx vitest run packages/rpiv-ask-user-question`
+> 聚焦测试命令：`cd ~/.pi/rpiv-mono && npx vitest run packages/rpiv-ask-user-question`
 
 ## Task 1: ask-prd-state — session 级开关状态
 

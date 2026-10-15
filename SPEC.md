@@ -74,7 +74,7 @@
 
 ```bash
 # 包内单测（本功能开发循环）
-cd ~/.pi/agent/rpiv-mono
+cd ~/.pi/rpiv-mono
 npx vitest run packages/rpiv-ask-user-question
 
 # 全仓单测（含其它包，基线 661 通过）
